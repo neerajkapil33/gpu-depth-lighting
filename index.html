@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GPU Depth Lighting</title>
+  </head>
+  <body>
+    <main>
+      <section class="intro">
+        <p class="eyebrow">WEBGPU / GPU-RESIDENT DEMO</p>
+        <h1>Monocular depth lighting</h1>
+        <p id="status">Checking WebGPU support…</p>
+        <button id="start" disabled>Start camera</button>
+        <p class="disclaimer">GPU-resident intermediates; no per-frame CPU pixel readback. Browser video import is not guaranteed physically zero-copy.</p>
+      </section>
+      <section class="viewer">
+        <canvas id="output" width="960" height="540"></canvas>
+        <dl class="metrics">
+          <div><dt>CPU encode</dt><dd id="cpu-ms">—</dd></div>
+          <div><dt>Frame rate</dt><dd id="fps">—</dd></div>
+          <div><dt>Input</dt><dd id="input-size">—</dd></div>
+          <div><dt>Pipeline</dt><dd>mock depth · GPU only</dd></div>
+        </dl>
+      </section>
+    </main>
+    <video id="video" autoplay muted playsinline hidden></video>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
