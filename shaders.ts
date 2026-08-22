@@ -42,7 +42,7 @@ fn reconstructNormals(@builtin(global_invocation_id) id: vec3u) {
 }`;
 
 export const compositeShader = /* wgsl */ `
-struct Frame { width: u32, height: u32, time: f32, _pad: f32 }
+struct Frame { width: u32, height: u32, time: f32, _pad0: f32, lightX: f32, lightY: f32, _pad1: f32, _pad2: f32 }
 @group(0) @binding(0) var camera: texture_external;
 @group(0) @binding(1) var videoSampler: sampler;
 @group(0) @binding(2) var depth: texture_2d<f32>;
@@ -66,15 +66,20 @@ struct VSOut { @builtin(position) position: vec4f, @location(0) uv: vec2f }
   ));
   let z = textureLoad(depth, p, 0).x;
   let n = normalize(textureLoad(normals, p, 0).xyz * 2.0 - 1.0);
-  // A clearly visible moving key light; one full sweep takes about three seconds.
-  let light = normalize(vec3f(sin(frame.time * 0.0020) * 1.3, cos(frame.time * 0.00155) * 1.3, 0.25));
-  let diffuse = max(dot(n, light), 0.0);
+  let aspect = f32(frame.width) / f32(frame.height);
+  // Screen-space vector from this pixel to the virtual light (cursor-controlled orb).
+  let toLight2D = vec2f((frame.lightX - in.uv.x) * aspect, frame.lightY - in.uv.y);
+  let dist = length(toLight2D);
+  let lightDir = normalize(vec3f(toLight2D.x, -toLight2D.y, 0.28));
+  let diffuse = max(dot(n, lightDir), 0.0);
+  // Falloff: bright near the light, fading out with distance across the frame.
+  let falloff = clamp(1.0 - dist * 1.35, 0.0, 1.0);
   // Local depth discontinuity is a cheap screen-space contact-occlusion proxy.
   let neighbor = textureLoad(depth, min(p + vec2i(3, 3), vec2i(i32(frame.width - 1u), i32(frame.height - 1u))), 0).x;
   let occlusion = 1.0 - smoothstep(0.015, 0.15, abs(neighbor - z));
-  let rim = pow(1.0 - max(n.z, 0.0), 3.0) * 0.12;
-  // Preserve the source image and apply lighting as a restrained, visible modulation.
-  let illumination = 0.45 + diffuse * 0.95;
-  let shaded = src * illumination * mix(0.7, 1.0, occlusion) + vec3f(0.10, 0.35, 0.70) * rim * 3.0;
+  // Warm glowing orb drawn directly at the light position.
+  let orb = smoothstep(0.05, 0.0, dist) * 1.6;
+  let illumination = 0.30 + diffuse * falloff * falloff * 1.6;
+  let shaded = src * illumination * mix(0.7, 1.0, occlusion) + vec3f(1.0, 0.92, 0.75) * orb;
   return vec4f(clamp(shaded, vec3f(0.0), vec3f(1.0)), 1.0);
 }`;
