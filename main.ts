@@ -27,12 +27,11 @@ let lastSample = performance.now();
 let frames = 0;
 let checkFirstFrame = true;
 
-// The light's on-screen position, driven by whichever hand is currently tracked.
+// The light's current on-screen position.
 let lightX = 0.5;
 let lightY = 0.35;
-let handTracked = false;
 
-// --- MediaPipe hand tracking (real palm position, not a brightness guess) ---
+// --- MediaPipe hand tracking ---
 let handLandmarker: HandLandmarker | null = null;
 let handTrackerReady = false;
 
@@ -48,30 +47,96 @@ async function setupHandTracking(): Promise<void> {
       delegate: 'GPU',
     },
     runningMode: 'VIDEO',
-    numHands: 1,
+    numHands: 2,
   });
   handTrackerReady = true;
 }
 
 // Palm center: average of the wrist and the four finger base knuckles.
-// This stays stable in the middle of the palm even as fingers move.
 const PALM_LANDMARKS = [0, 5, 9, 13, 17];
+type Point = { x: number; y: number };
 
-function updateLightFromHand(nowMs: number): void {
+// Previous-frame palm positions, used to compute each hand's velocity.
+const prevPalm: (Point | null)[] = [null, null];
+const palmVelocity: Point[] = [{ x: 0, y: 0 }, { x: 0, y: 0 }];
+let currentPalms: (Point | null)[] = [null, null];
+
+// --- Throw/catch physics state ---
+type LightState = 'held' | 'free';
+let lightState: LightState = 'held';
+let heldHandIndex = 0;
+let freeVelX = 0;
+let freeVelY = 0;
+
+const THROW_SPEED_THRESHOLD = 0.028; // per-frame palm displacement that counts as a "flick"
+const THROW_MULTIPLIER = 3.2;
+const GRAVITY = 0.0011;
+const DAMPING = 0.994;
+const BOUNCE_DAMPING = 0.55;
+const CATCH_RADIUS = 0.1;
+
+function detectHands(nowMs: number): void {
+  currentPalms = [null, null];
   if (!handTrackerReady || !handLandmarker || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
   const result: HandLandmarkerResult = handLandmarker.detectForVideo(video, nowMs);
-  if (result.landmarks.length > 0) {
-    const points = result.landmarks[0];
+  for (let i = 0; i < Math.min(2, result.landmarks.length); i++) {
+    const points = result.landmarks[i];
     let sx = 0, sy = 0;
     for (const idx of PALM_LANDMARKS) { sx += points[idx].x; sy += points[idx].y; }
-    lightX = sx / PALM_LANDMARKS.length;
-    lightY = sy / PALM_LANDMARKS.length;
-    handTracked = true;
-  } else {
-    handTracked = false;
+    currentPalms[i] = { x: sx / PALM_LANDMARKS.length, y: sy / PALM_LANDMARKS.length };
   }
-  handIndicator.style.display = handTracked ? 'flex' : 'none';
-  if (handTracked) {
+  for (let i = 0; i < 2; i++) {
+    const cur = currentPalms[i];
+    const prev = prevPalm[i];
+    palmVelocity[i] = cur && prev ? { x: cur.x - prev.x, y: cur.y - prev.y } : { x: 0, y: 0 };
+    prevPalm[i] = cur;
+  }
+}
+
+function updateLightPhysics(): void {
+  if (lightState === 'held') {
+    const palm = currentPalms[heldHandIndex];
+    if (palm) {
+      lightX = palm.x;
+      lightY = palm.y;
+      const speed = Math.hypot(palmVelocity[heldHandIndex].x, palmVelocity[heldHandIndex].y);
+      if (speed > THROW_SPEED_THRESHOLD) {
+        lightState = 'free';
+        freeVelX = palmVelocity[heldHandIndex].x * THROW_MULTIPLIER;
+        freeVelY = palmVelocity[heldHandIndex].y * THROW_MULTIPLIER;
+      }
+    } else {
+      // Lost track of the holding hand: drop the light where it was.
+      lightState = 'free';
+      freeVelX = 0;
+      freeVelY = 0;
+    }
+  } else {
+    freeVelY += GRAVITY;
+    freeVelX *= DAMPING;
+    freeVelY *= DAMPING;
+    lightX += freeVelX;
+    lightY += freeVelY;
+    if (lightX < 0.02) { lightX = 0.02; freeVelX = -freeVelX * BOUNCE_DAMPING; }
+    if (lightX > 0.98) { lightX = 0.98; freeVelX = -freeVelX * BOUNCE_DAMPING; }
+    if (lightY < 0.02) { lightY = 0.02; freeVelY = -freeVelY * BOUNCE_DAMPING; }
+    if (lightY > 0.98) { lightY = 0.98; freeVelY = -freeVelY * BOUNCE_DAMPING; }
+    for (let i = 0; i < 2; i++) {
+      const palm = currentPalms[i];
+      if (!palm) continue;
+      const dist = Math.hypot(lightX - palm.x, lightY - palm.y);
+      if (dist < CATCH_RADIUS) {
+        lightState = 'held';
+        heldHandIndex = i;
+        freeVelX = 0;
+        freeVelY = 0;
+        break;
+      }
+    }
+  }
+  const anyHandVisible = currentPalms[0] !== null || currentPalms[1] !== null;
+  handIndicator.style.display = anyHandVisible && lightState === 'held' ? 'flex' : 'none';
+  if (anyHandVisible && lightState === 'held') {
     const rect = canvas.getBoundingClientRect();
     handIndicator.style.left = `${lightX * rect.width}px`;
     handIndicator.style.top = `${lightY * rect.height}px`;
@@ -120,7 +185,8 @@ async function initialize(): Promise<void> {
 function frame(time: number): void {
   if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) { requestAnimationFrame(frame); return; }
   const started = performance.now();
-  updateLightFromHand(started);
+  detectHands(started);
+  updateLightPhysics();
   const external = device.importExternalTexture({ source: video });
   device.queue.writeBuffer(resources.uniform, 0, new Uint32Array([OUTPUT_WIDTH, OUTPUT_HEIGHT]));
   device.queue.writeBuffer(resources.uniform, 8, new Float32Array([time, 0]));
@@ -174,12 +240,12 @@ start.addEventListener('click', async () => {
     await video.play();
     inputSize.textContent = `${video.videoWidth}×${video.videoHeight}`;
     start.disabled = true;
-    status.textContent = 'Running: hand-tracked light + GPU depth lighting.';
+    status.textContent = 'Running: hand-tracked light with throw/catch physics.';
     requestAnimationFrame(frame);
   } catch (error) { status.textContent = `Camera failed: ${(error as Error).message}`; }
 });
 
 initialize()
   .then(() => setupHandTracking())
-  .then(() => { start.disabled = false; status.textContent = 'Ready. Start the camera, then show your hand to grab the light.'; })
+  .then(() => { start.disabled = false; status.textContent = 'Ready. Start the camera, hold your palm out, then flick to throw the light.'; })
   .catch((error: Error) => { status.textContent = error.message; });
