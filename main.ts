@@ -1,5 +1,6 @@
 import './style.css';
 import { compositeShader, inferenceShader, normalShader } from './shaders';
+import { FilesetResolver, HandLandmarker, type HandLandmarkerResult } from '@mediapipe/tasks-vision';
 
 const OUTPUT_WIDTH = 960;
 const OUTPUT_HEIGHT = 540;
@@ -12,6 +13,7 @@ const status = document.querySelector<HTMLElement>('#status')!;
 const cpuMs = document.querySelector<HTMLElement>('#cpu-ms')!;
 const fps = document.querySelector<HTMLElement>('#fps')!;
 const inputSize = document.querySelector<HTMLElement>('#input-size')!;
+const handIndicator = document.querySelector<HTMLElement>('#hand-indicator')!;
 
 type Resources = { depth: GPUTexture; normal: GPUTexture; uniform: GPUBuffer; videoSampler: GPUSampler };
 let device: GPUDevice;
@@ -24,13 +26,57 @@ let compositePipeline: GPURenderPipeline;
 let lastSample = performance.now();
 let frames = 0;
 let checkFirstFrame = true;
+
+// The light's on-screen position, driven by whichever hand is currently tracked.
 let lightX = 0.5;
 let lightY = 0.35;
-canvas.addEventListener('pointermove', (event) => {
-  const rect = canvas.getBoundingClientRect();
-  lightX = (event.clientX - rect.left) / rect.width;
-  lightY = (event.clientY - rect.top) / rect.height;
-});
+let handTracked = false;
+
+// --- MediaPipe hand tracking (real palm position, not a brightness guess) ---
+let handLandmarker: HandLandmarker | null = null;
+let handTrackerReady = false;
+
+async function setupHandTracking(): Promise<void> {
+  status.textContent = 'Loading hand-tracking model…';
+  const vision = await FilesetResolver.forVisionTasks(
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+  );
+  handLandmarker = await HandLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath:
+        'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+      delegate: 'GPU',
+    },
+    runningMode: 'VIDEO',
+    numHands: 1,
+  });
+  handTrackerReady = true;
+}
+
+// Palm center: average of the wrist and the four finger base knuckles.
+// This stays stable in the middle of the palm even as fingers move.
+const PALM_LANDMARKS = [0, 5, 9, 13, 17];
+
+function updateLightFromHand(nowMs: number): void {
+  if (!handTrackerReady || !handLandmarker || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+  const result: HandLandmarkerResult = handLandmarker.detectForVideo(video, nowMs);
+  if (result.landmarks.length > 0) {
+    const points = result.landmarks[0];
+    let sx = 0, sy = 0;
+    for (const idx of PALM_LANDMARKS) { sx += points[idx].x; sy += points[idx].y; }
+    lightX = sx / PALM_LANDMARKS.length;
+    lightY = sy / PALM_LANDMARKS.length;
+    handTracked = true;
+  } else {
+    handTracked = false;
+  }
+  handIndicator.style.display = handTracked ? 'flex' : 'none';
+  if (handTracked) {
+    const rect = canvas.getBoundingClientRect();
+    handIndicator.style.left = `${lightX * rect.width}px`;
+    handIndicator.style.top = `${lightY * rect.height}px`;
+  }
+}
 
 function makeTexture(format: GPUTextureFormat): GPUTexture {
   return device.createTexture({
@@ -74,6 +120,7 @@ async function initialize(): Promise<void> {
 function frame(time: number): void {
   if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) { requestAnimationFrame(frame); return; }
   const started = performance.now();
+  updateLightFromHand(started);
   const external = device.importExternalTexture({ source: video });
   device.queue.writeBuffer(resources.uniform, 0, new Uint32Array([OUTPUT_WIDTH, OUTPUT_HEIGHT]));
   device.queue.writeBuffer(resources.uniform, 8, new Float32Array([time, 0]));
@@ -127,9 +174,12 @@ start.addEventListener('click', async () => {
     await video.play();
     inputSize.textContent = `${video.videoWidth}×${video.videoHeight}`;
     start.disabled = true;
-    status.textContent = 'Running: external video → mock inference → normals → lighting, entirely on the GPU.';
+    status.textContent = 'Running: hand-tracked light + GPU depth lighting.';
     requestAnimationFrame(frame);
   } catch (error) { status.textContent = `Camera failed: ${(error as Error).message}`; }
 });
 
-initialize().then(() => { start.disabled = false; status.textContent = 'WebGPU ready. Start the camera to run the GPU pipeline.'; }).catch((error: Error) => { status.textContent = error.message; });
+initialize()
+  .then(() => setupHandTracking())
+  .then(() => { start.disabled = false; status.textContent = 'Ready. Start the camera, then show your hand to grab the light.'; })
+  .catch((error: Error) => { status.textContent = error.message; });
