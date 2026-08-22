@@ -75,6 +75,6 @@ struct VSOut { @builtin(position) position: vec4f, @location(0) uv: vec2f }
   let rim = pow(1.0 - max(n.z, 0.0), 3.0) * 0.12;
   // Preserve the source image and apply lighting as a restrained, visible modulation.
   let illumination = 0.45 + diffuse * 0.95;
-let shaded = src * illumination * mix(0.7, 1.0, occlusion) + vec3f(0.10, 0.35, 0.70) * rim * 3.0;
+  let shaded = src * illumination * mix(0.7, 1.0, occlusion) + vec3f(0.10, 0.35, 0.70) * rim * 3.0;
   return vec4f(clamp(shaded, vec3f(0.0), vec3f(1.0)), 1.0);
 }`;
