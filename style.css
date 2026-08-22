@@ -3,7 +3,6 @@
 .intro { display: grid; gap: .75rem; max-width: 720px; } .eyebrow { color: #65c9ff; font-size: .75rem; letter-spacing: .12em; margin: 0; }
 h1 { font-size: clamp(2rem, 5vw, 4rem); margin: 0; } p { margin: 0; color: #b6c7d8; line-height: 1.5; }
 button { width: fit-content; padding: .75rem 1.1rem; border: 0; border-radius: .5rem; font: inherit; font-weight: 700; background: #65c9ff; color: #06121c; cursor: pointer; } button:disabled { opacity: .5; cursor: wait; }
-.disclaimer { font-size: .85rem; } .viewer { position: relative; margin-top: 2rem; border: 1px solid #27455f; border-radius: .75rem; overflow: hidden; background: #020609; }
-#hand-indicator { position: absolute; width: 44px; height: 44px; margin-left: -22px; margin-top: -22px; display: none; align-items: center; justify-content: center; font-size: 26px; border-radius: 50%; background: rgba(6, 18, 28, 0.72); border: 2px solid #ffcf8a; pointer-events: none; transition: opacity .12s ease; }
+.disclaimer { font-size: .85rem; } .viewer { margin-top: 2rem; border: 1px solid #27455f; border-radius: .75rem; overflow: hidden; background: #020609; }
 canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #111; } .metrics { display: grid; grid-template-columns: repeat(4, 1fr); margin: 0; padding: 1rem; gap: 1rem; background: #0b1823; }
 .metrics div { min-width: 0; } dt { color: #91a7bc; font-size: .7rem; text-transform: uppercase; } dd { margin: .2rem 0 0; color: white; font-weight: 650; font-size: .9rem; } @media (max-width: 620px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
