@@ -24,6 +24,13 @@ let compositePipeline: GPURenderPipeline;
 let lastSample = performance.now();
 let frames = 0;
 let checkFirstFrame = true;
+let lightX = 0.5;
+let lightY = 0.35;
+canvas.addEventListener('pointermove', (event) => {
+  const rect = canvas.getBoundingClientRect();
+  lightX = (event.clientX - rect.left) / rect.width;
+  lightY = (event.clientY - rect.top) / rect.height;
+});
 
 function makeTexture(format: GPUTextureFormat): GPUTexture {
   return device.createTexture({
@@ -49,7 +56,7 @@ async function initialize(): Promise<void> {
   resources = {
     depth: makeTexture('r32float'),
     normal: makeTexture('rgba16float'),
-    uniform: device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
+    uniform: device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
     videoSampler: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }),
   };
   inferencePipeline = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: inferenceShader }), entryPoint: 'mockDepth' } });
@@ -70,6 +77,7 @@ function frame(time: number): void {
   const external = device.importExternalTexture({ source: video });
   device.queue.writeBuffer(resources.uniform, 0, new Uint32Array([OUTPUT_WIDTH, OUTPUT_HEIGHT]));
   device.queue.writeBuffer(resources.uniform, 8, new Float32Array([time, 0]));
+  device.queue.writeBuffer(resources.uniform, 16, new Float32Array([lightX, lightY, 0, 0]));
   if (checkFirstFrame) device.pushErrorScope('validation');
   // All pass dependencies are encoded into exactly one command buffer and submitted once.
   const encoder = device.createCommandEncoder({ label: 'depth-lighting-frame' });
