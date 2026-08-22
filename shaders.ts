@@ -67,19 +67,27 @@ struct VSOut { @builtin(position) position: vec4f, @location(0) uv: vec2f }
   let z = textureLoad(depth, p, 0).x;
   let n = normalize(textureLoad(normals, p, 0).xyz * 2.0 - 1.0);
   let aspect = f32(frame.width) / f32(frame.height);
-  // Screen-space vector from this pixel to the virtual light (cursor-controlled orb).
+  // Screen-space vector from this pixel to the virtual light.
   let toLight2D = vec2f((frame.lightX - in.uv.x) * aspect, frame.lightY - in.uv.y);
   let dist = length(toLight2D);
   let lightDir = normalize(vec3f(toLight2D.x, -toLight2D.y, 0.28));
   let diffuse = max(dot(n, lightDir), 0.0);
-  // Falloff: bright near the light, fading out with distance across the frame.
   let falloff = clamp(1.0 - dist * 1.35, 0.0, 1.0);
-  // Local depth discontinuity is a cheap screen-space contact-occlusion proxy.
   let neighbor = textureLoad(depth, min(p + vec2i(3, 3), vec2i(i32(frame.width - 1u), i32(frame.height - 1u))), 0).x;
   let occlusion = 1.0 - smoothstep(0.015, 0.15, abs(neighbor - z));
-  // Warm glowing orb drawn directly at the light position.
-  let orb = smoothstep(0.05, 0.0, dist) * 1.6;
-  let illumination = 0.30 + diffuse * falloff * falloff * 1.6;
+  // Sample depth right at the light's own screen position: whatever is closest
+  // to the camera there (e.g. a raised hand) is treated as physically blocking
+  // the light, so it darkens instead of lighting up.
+  let lightPixel = vec2i(clamp(
+    vec2f(frame.lightX, frame.lightY) * vec2f(f32(frame.width), f32(frame.height)),
+    vec2f(0.0),
+    vec2f(f32(frame.width - 1u), f32(frame.height - 1u))
+  ));
+  let depthAtLight = textureLoad(depth, lightPixel, 0).x;
+  let blocked = smoothstep(0.05, 0.16, depthAtLight - 0.5);
+  let orb = smoothstep(0.05, 0.0, dist) * 1.6 * (1.0 - blocked);
+  let boost = diffuse * falloff * falloff * 1.6 * (1.0 - blocked);
+  let illumination = 0.62 + boost;
   let shaded = src * illumination * mix(0.7, 1.0, occlusion) + vec3f(1.0, 0.92, 0.75) * orb;
   return vec4f(clamp(shaded, vec3f(0.0), vec3f(1.0)), 1.0);
 }`;
