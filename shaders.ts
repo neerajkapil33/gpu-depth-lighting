@@ -67,7 +67,7 @@ struct VSOut { @builtin(position) position: vec4f, @location(0) uv: vec2f }
   let z = textureLoad(depth, p, 0).x;
   let n = normalize(textureLoad(normals, p, 0).xyz * 2.0 - 1.0);
   // A clearly visible moving key light; one full sweep takes about three seconds.
-  let light = normalize(vec3f(sin(frame.time * 0.0020) * 0.85, cos(frame.time * 0.00155) * 0.45, 1.15));
+  let light = normalize(vec3f(sin(frame.time * 0.0020) * 1.3, cos(frame.time * 0.00155) * 1.3, 0.25));
   let diffuse = max(dot(n, light), 0.0);
   // Local depth discontinuity is a cheap screen-space contact-occlusion proxy.
   let neighbor = textureLoad(depth, min(p + vec2i(3, 3), vec2i(i32(frame.width - 1u), i32(frame.height - 1u))), 0).x;
