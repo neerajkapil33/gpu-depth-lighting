@@ -1,31 +1,714 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>GPU Depth Lighting</title>
-  </head>
-  <body>
-    <main>
-      <section class="intro">
-        <p class="eyebrow">WEBGPU / GPU-RESIDENT DEMO</p>
-        <h1>Monocular depth lighting</h1>
-        <p id="status">Checking WebGPU support…</p>
-        <button id="start" disabled>Start camera</button>
-        <p class="disclaimer">GPU-resident intermediates; no per-frame CPU pixel readback. Browser video import is not guaranteed physically zero-copy.</p>
-      </section>
-      <section class="viewer">
-       <canvas id="output" width="960" height="540"></canvas>
-        <div id="hand-indicator">✋</div>
-        <dl class="metrics">
-          <div><dt>CPU encode</dt><dd id="cpu-ms">—</dd></div>
-          <div><dt>Frame rate</dt><dd id="fps">—</dd></div>
-          <div><dt>Input</dt><dd id="input-size">—</dd></div>
-          <div><dt>Pipeline</dt><dd>mock depth · GPU only</dd></div>
-        </dl>
-      </section>
-    </main>
-    <video id="video" autoplay muted playsinline hidden></video>
-    <script type="module" src="/src/main.ts"></script>
-  </body>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Virtual Light</title>
+<style>
+  :root{
+    --ink:#f2ede2;
+    --dim:rgba(242,237,226,0.62);
+    --panel-bg:rgba(20,18,15,0.55);
+    --ok:#5fe0a0;
+    --warn:#e0b45f;
+    --bad:#e05f5f;
+    --mono: 'SFMono-Regular', ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+    --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  }
+  *{ box-sizing:border-box; }
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background:#0c0b0a; overflow:hidden;
+    font-family: var(--mono);
+    -webkit-user-select:none; user-select:none;
+  }
+  #stage{ position:relative; width:100vw; height:100vh; overflow:hidden; }
+
+  canvas#scene{
+    position:absolute; inset:0; width:100%; height:100%;
+    display:block; cursor:grab;
+  }
+  canvas#scene.dragging{ cursor:grabbing; }
+
+  /* top-left status panel */
+  #panel{
+    position:absolute; top:16px; left:16px;
+    background:var(--panel-bg);
+    backdrop-filter: blur(6px);
+    border:1px solid rgba(242,237,226,0.10);
+    border-radius:10px;
+    padding:12px 16px;
+    color:var(--ink);
+    font-size:12.5px;
+    letter-spacing:0.02em;
+    min-width:210px;
+    z-index:5;
+  }
+  .status-row{ display:flex; align-items:center; gap:8px; margin-bottom:6px; line-height:1.4; }
+  .status-row:last-of-type{ margin-bottom:0; }
+  .dot{
+    width:7px; height:7px; border-radius:50%; flex:0 0 auto;
+    background:var(--warn);
+    box-shadow:0 0 6px currentColor;
+  }
+  .dot.ok{ background:var(--ok); color:var(--ok); animation:pulse 2s ease-in-out infinite; }
+  .dot.bad{ background:var(--bad); color:var(--bad); }
+  .dot.warn{ background:var(--warn); color:var(--warn); }
+  @keyframes pulse{ 0%,100%{opacity:1;} 50%{opacity:0.35;} }
+  #fpsLine{ margin-top:8px; color:var(--dim); font-size:11.5px; }
+  #depthBtn{
+    margin-top:10px;
+    width:100%;
+    background:transparent;
+    border:1px solid rgba(242,237,226,0.28);
+    color:var(--ink);
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:0.03em;
+    padding:6px 8px;
+    border-radius:6px;
+    cursor:pointer;
+    transition:background 0.15s ease, border-color 0.15s ease;
+  }
+  #depthBtn:hover{ background:rgba(242,237,226,0.08); border-color:rgba(242,237,226,0.5); }
+  #depthBtn.active{ background:rgba(242,237,226,0.16); border-color:var(--ink); }
+
+  /* bottom-left title block */
+  #titleBlock{
+    position:absolute; left:24px; bottom:24px; right:24px;
+    max-width:560px;
+    z-index:5;
+    text-shadow: 0 2px 18px rgba(0,0,0,0.55);
+  }
+  #titleBlock h1{
+    font-family: var(--serif);
+    font-weight:400;
+    font-size:clamp(28px, 4.6vw, 44px);
+    margin:0 0 8px 0;
+    color:var(--ink);
+    letter-spacing:0.01em;
+  }
+  #titleBlock p{
+    margin:0;
+    font-family: var(--mono);
+    font-size:12.5px;
+    line-height:1.6;
+    color:var(--dim);
+    max-width:480px;
+  }
+
+  /* bottom gradient for legibility */
+  #scrim{
+    position:absolute; left:0; right:0; bottom:0; height:38%;
+    background:linear-gradient(to top, rgba(0,0,0,0.55), rgba(0,0,0,0));
+    pointer-events:none; z-index:4;
+  }
+
+  /* boot overlay */
+  #boot{
+    position:absolute; inset:0; z-index:20;
+    background:#0c0b0a;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    color:var(--dim); font-size:12.5px; gap:10px; text-align:center; padding:24px;
+  }
+  #boot h2{ color:var(--ink); font-family:var(--serif); font-weight:400; font-size:24px; margin:0 0 6px 0; }
+  #bootMsg{ min-height:18px; }
+  #bootBtn{
+    margin-top:14px; background:var(--ink); color:#0c0b0a; border:none;
+    font-family:var(--mono); font-size:12.5px; padding:10px 18px; border-radius:6px;
+    cursor:pointer; letter-spacing:0.03em;
+  }
+  #bootErr{ color:var(--bad); max-width:460px; font-size:11.5px; display:none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="scene"></canvas>
+  <div id="scrim"></div>
+
+  <div id="panel">
+    <div class="status-row"><span class="dot warn" id="dotReady"></span><span id="readyLabel">STARTING</span></div>
+    <div class="status-row"><span class="dot warn" id="dotDepth"></span><span id="depthLabel">DEPTH: INITIALIZING</span></div>
+    <div id="fpsLine">-- fps</div>
+    <button id="depthBtn">show depth</button>
+  </div>
+
+  <div id="titleBlock">
+    <h1>Virtual Light</h1>
+    <p id="instructions">Click and drag the light with your mouse, or use your hands: open a palm
+    in front of it, close your fist to catch it, toss it to your other open hand,
+    or open your mouth to let it in. Real monocular depth means anything
+    closer to the camera than the light — your hand, your face — genuinely
+    hides it.</p>
+  </div>
+
+  <div id="boot">
+    <h2>Virtual Light</h2>
+    <div id="bootMsg">this needs your camera, a modern browser, and a moment to load a couple of small ML models.</div>
+    <div id="bootErr"></div>
+    <button id="bootBtn">enable camera &amp; start</button>
+  </div>
+</div>
+
+<script type="module">
+import { HandLandmarker, FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/+esm";
+
+/* ---------------------------------------------------------------------
+   DOM
+--------------------------------------------------------------------- */
+const video      = document.createElement('video');
+video.muted = true; video.playsInline = true; video.autoplay = true;
+
+const canvas      = document.getElementById('scene');
+const ctx         = canvas.getContext('2d');
+const dotReady    = document.getElementById('dotReady');
+const readyLabel  = document.getElementById('readyLabel');
+const dotDepth    = document.getElementById('dotDepth');
+const depthLabel  = document.getElementById('depthLabel');
+const fpsLine     = document.getElementById('fpsLine');
+const depthBtn    = document.getElementById('depthBtn');
+const boot        = document.getElementById('boot');
+const bootMsg     = document.getElementById('bootMsg');
+const bootErr     = document.getElementById('bootErr');
+const bootBtn     = document.getElementById('bootBtn');
+
+let showDepthView = false;
+depthBtn.addEventListener('click', () => {
+  showDepthView = !showDepthView;
+  depthBtn.classList.toggle('active', showDepthView);
+  depthBtn.textContent = showDepthView ? 'show camera' : 'show depth';
+});
+
+/* ---------------------------------------------------------------------
+   STATE
+--------------------------------------------------------------------- */
+const state = {
+  handLandmarker: null,
+  faceLandmarker: null,
+  depthEstimator: null,
+  depthBackend: 'none',      // 'webgpu' | 'wasm' | 'none'
+  depthMap: null,            // Float32Array normalized 0..1 (1 = near)
+  depthMapW: 0, depthMapH: 0,
+  depthFps: 0,
+  running: false,
+};
+
+// the light itself
+const light = {
+  x: 0.5, y: 0.45,           // normalized [0,1] canvas-space
+  z: 0.35,                   // 0 = far (near the wall), 1 = right at the lens
+  vx: 0, vy: 0,
+  radius: 0.055,             // normalized to canvas min-dimension
+  mode: 'free',              // 'free' | 'held' | 'dragging' | 'eaten'
+  heldBy: null,               // 'Left' | 'Right' | null
+  eatT: 0,
+};
+
+function respawnLight(){
+  light.x = 0.30 + Math.random()*0.4;
+  light.y = 0.30 + Math.random()*0.3;
+  light.z = 0.30;
+  light.vx = 0; light.vy = 0;
+  light.mode = 'free';
+  light.heldBy = null;
+  light.eatT = 0;
+}
+
+/* ---------------------------------------------------------------------
+   BOOT
+--------------------------------------------------------------------- */
+bootBtn.addEventListener('click', boot1, { once:true });
+
+async function boot1(){
+  bootBtn.disabled = true;
+  bootBtn.textContent = 'starting…';
+  try{
+    bootMsg.textContent = 'requesting camera…';
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode:'user', width:{ideal:1280}, height:{ideal:720} },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    await new Promise(r => {
+      if (video.readyState >= 2) return r();
+      video.onloadedmetadata = () => r();
+    });
+
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    bootMsg.textContent = 'loading hand & face tracking…';
+    await loadLandmarkers();
+
+    bootMsg.textContent = 'loading depth model (first run downloads ~25–50MB, then it is cached)…';
+    loadDepthModel(); // fire and forget — app runs without it, upgrades when ready
+
+    boot.style.display = 'none';
+    setReady(true);
+    respawnLight();
+    state.running = true;
+    requestAnimationFrame(loop);
+    depthLoop();
+
+  }catch(err){
+    console.error(err);
+    bootErr.style.display = 'block';
+    bootErr.textContent = 'Could not start: ' + (err && err.message ? err.message : err) +
+      '. Camera + a Chromium browser (Chrome/Edge) served over https:// or localhost is required.';
+    bootBtn.disabled = false;
+    bootBtn.textContent = 'try again';
+  }
+}
+
+async function loadLandmarkers(){
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm"
+  );
+  try{
+    state.handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      numHands: 2
+    });
+  }catch(e){ console.warn('hand landmarker failed to load, gestures disabled', e); }
+
+  try{
+    state.faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      numFaces: 1
+    });
+  }catch(e){ console.warn('face landmarker failed to load, mouth interaction disabled', e); }
+}
+
+async function loadDepthModel(){
+  try{
+    const { pipeline, env } = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2/+esm");
+    env.allowLocalModels = false;
+    const useWebGPU = !!navigator.gpu;
+    depthLabel.textContent = 'DEPTH: LOADING…';
+    state.depthEstimator = await pipeline(
+      'depth-estimation',
+      'onnx-community/depth-anything-v2-small',
+      { device: useWebGPU ? 'webgpu' : 'wasm', dtype: 'fp32' }
+    );
+    state.depthBackend = useWebGPU ? 'webgpu' : 'wasm';
+    dotDepth.classList.remove('warn','bad'); dotDepth.classList.add('ok');
+    depthLabel.textContent = `DEPTH: ${state.depthBackend.toUpperCase()} · -- FPS`;
+  }catch(e){
+    console.warn('depth model failed to load — running without occlusion', e);
+    state.depthBackend = 'none';
+    dotDepth.classList.remove('warn','ok'); dotDepth.classList.add('bad');
+    depthLabel.textContent = 'DEPTH: UNAVAILABLE';
+  }
+}
+
+function setReady(ok){
+  dotReady.classList.remove('warn','bad','ok');
+  dotReady.classList.add(ok ? 'ok' : 'bad');
+  readyLabel.textContent = ok ? 'READY' : 'ERROR';
+}
+
+/* ---------------------------------------------------------------------
+   DEPTH LOOP (independent, self-throttling — runs as fast as inference allows)
+--------------------------------------------------------------------- */
+const depthCanvas = document.createElement('canvas');
+depthCanvas.width = 128; depthCanvas.height = 128;
+const depthCtx = depthCanvas.getContext('2d', { willReadFrequently:true });
+
+let depthFrameCount = 0, depthFpsWindowStart = performance.now();
+
+async function depthLoop(){
+  while (true){
+    if (!state.running){ await sleep(200); continue; }
+    if (!state.depthEstimator){ await sleep(300); continue; }
+    try{
+      // downscale current mirrored frame into a small square for the model
+      depthCtx.save();
+      depthCtx.translate(depthCanvas.width, 0);
+      depthCtx.scale(-1, 1);
+      depthCtx.drawImage(video, 0, 0, depthCanvas.width, depthCanvas.height);
+      depthCtx.restore();
+
+      const out = await state.depthEstimator(depthCanvas);
+      const depthImg = out.depth; // RawImage: {data, width, height, channels}
+      const { data, width, height } = depthImg;
+
+      // normalize to 0..1, 1 = near
+      let min = Infinity, max = -Infinity;
+      for (let i=0;i<data.length;i++){ const v=data[i]; if (v<min) min=v; if (v>max) max=v; }
+      const range = (max - min) || 1;
+      const norm = new Float32Array(width*height);
+      for (let i=0;i<width*height;i++){ norm[i] = (data[i] - min) / range; }
+
+      state.depthMap = norm;
+      state.depthMapW = width;
+      state.depthMapH = height;
+
+      depthFrameCount++;
+      const now = performance.now();
+      if (now - depthFpsWindowStart > 1000){
+        state.depthFps = depthFrameCount / ((now - depthFpsWindowStart)/1000);
+        depthFrameCount = 0;
+        depthFpsWindowStart = now;
+        depthLabel.textContent = `DEPTH: ${state.depthBackend.toUpperCase()} · ${state.depthFps.toFixed(1)} FPS`;
+      }
+    }catch(e){
+      console.warn('depth inference error', e);
+      await sleep(500);
+    }
+  }
+}
+
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+function sampleDepth(nx, ny){ // nx,ny normalized [0,1] canvas space (already mirrored coords)
+  if (!state.depthMap) return 0; // unknown -> treat as far, light stays visible
+  const x = Math.min(state.depthMapW-1, Math.max(0, Math.floor(nx * state.depthMapW)));
+  const y = Math.min(state.depthMapH-1, Math.max(0, Math.floor(ny * state.depthMapH)));
+  return state.depthMap[y*state.depthMapW + x];
+}
+
+/* ---------------------------------------------------------------------
+   HAND GEOMETRY HELPERS
+--------------------------------------------------------------------- */
+function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
+
+function fingerExtended(lm, tipIdx, mcpIdx, wristIdx){
+  const wrist = lm[wristIdx];
+  return dist(lm[tipIdx], wrist) > dist(lm[mcpIdx], wrist) * 1.18;
+}
+
+function classifyHand(lm){
+  const wrist = 0;
+  const fingers = [
+    fingerExtended(lm, 8,  5,  wrist),
+    fingerExtended(lm, 12, 9,  wrist),
+    fingerExtended(lm, 16, 13, wrist),
+    fingerExtended(lm, 20, 17, wrist),
+  ];
+  const extendedCount = fingers.filter(Boolean).length;
+  if (extendedCount >= 3) return 'open';
+  if (extendedCount <= 1) return 'fist';
+  return 'partial';
+}
+
+function handCenter(lm){
+  // average of wrist + mcp joints -> stable palm centroid
+  const idxs = [0,5,9,13,17];
+  let x=0,y=0;
+  for (const i of idxs){ x += lm[i].x; y += lm[i].y; }
+  return { x: x/idxs.length, y: y/idxs.length };
+}
+
+function handSize(lm){
+  // rough proxy for hand-to-camera distance: wrist to middle-mcp span
+  return dist(lm[0], lm[9]);
+}
+
+/* ---------------------------------------------------------------------
+   MOUSE / TOUCH DRAG (always works, no ML required)
+--------------------------------------------------------------------- */
+let dragging = false;
+function pointerToNorm(evt){
+  const rect = canvas.getBoundingClientRect();
+  const px = (evt.touches ? evt.touches[0].clientX : evt.clientX) - rect.left;
+  const py = (evt.touches ? evt.touches[0].clientY : evt.clientY) - rect.top;
+  return { x: px / rect.width, y: py / rect.height };
+}
+function lightScreenRadius(){
+  return light.radius * Math.min(canvas.width, canvas.height) * (0.6 + 0.8*light.z);
+}
+canvas.addEventListener('pointerdown', (e) => {
+  const p = pointerToNorm(e);
+  const rect = canvas.getBoundingClientRect();
+  const d = Math.hypot((p.x-light.x)*rect.width, (p.y-light.y)*rect.height);
+  if (d < lightScreenRadius() * 2.2){
+    dragging = true;
+    light.mode = 'dragging';
+    light.heldBy = null;
+    canvas.classList.add('dragging');
+  }
+});
+window.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const p = pointerToNorm(e);
+  light.x = Math.min(0.98, Math.max(0.02, p.x));
+  light.y = Math.min(0.98, Math.max(0.02, p.y));
+  light.z = 0.55;
+});
+window.addEventListener('pointerup', () => {
+  if (!dragging) return;
+  dragging = false;
+  canvas.classList.remove('dragging');
+  light.mode = 'free';
+});
+
+/* ---------------------------------------------------------------------
+   MAIN RENDER / INTERACTION LOOP
+--------------------------------------------------------------------- */
+let lastHands = null, lastFace = null;
+let prevHandCenters = {}; // handedness -> {x,y,t}
+let frameCount = 0, fpsWindowStart = performance.now(), curFps = 0;
+
+function loop(ts){
+  if (!state.running) return;
+  requestAnimationFrame(loop);
+  if (video.readyState < 2) return;
+
+  // 1. detect
+  if (state.handLandmarker){
+    try{ lastHands = state.handLandmarker.detectForVideo(video, ts); }catch(e){}
+  }
+  if (state.faceLandmarker){
+    try{ lastFace = state.faceLandmarker.detectForVideo(video, ts); }catch(e){}
+  }
+
+  // 2. draw mirrored camera frame
+  ctx.save();
+  ctx.translate(canvas.width, 0);
+  ctx.scale(-1, 1);
+  if (showDepthView && state.depthMap){
+    drawDepthView();
+  } else {
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  }
+  ctx.restore();
+
+  // 3. gesture interactions (only meaningful in normal view; still computed either way)
+  if (!dragging) handleGestures();
+
+  // 4. physics
+  updatePhysics();
+
+  // 5. light render with depth occlusion
+  if (!showDepthView) drawLight();
+
+  // 6. fps
+  frameCount++;
+  const now = performance.now();
+  if (now - fpsWindowStart > 500){
+    curFps = frameCount / ((now - fpsWindowStart)/1000);
+    frameCount = 0; fpsWindowStart = now;
+    fpsLine.textContent = `${curFps.toFixed(0)} fps`;
+  }
+}
+
+function drawDepthView(){
+  // upscale the small normalized depth map into the mirrored canvas space
+  if (!state.depthMap) return;
+  const w = state.depthMapW, h = state.depthMapH;
+  const imgData = depthCtx.createImageData(w, h);
+  for (let i=0;i<w*h;i++){
+    const v = Math.round(state.depthMap[i]*255);
+    imgData.data[i*4+0] = v;
+    imgData.data[i*4+1] = v;
+    imgData.data[i*4+2] = v;
+    imgData.data[i*4+3] = 255;
+  }
+  depthCtx.putImageData(imgData, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(depthCanvas, 0, 0, canvas.width, canvas.height);
+}
+
+function handleGestures(){
+  if (!lastHands || !lastHands.landmarks || lastHands.landmarks.length === 0){
+    // no hands visible — nothing to do
+  } else {
+    for (let i=0;i<lastHands.landmarks.length;i++){
+      const lm = lastHands.landmarks[i];
+      const handedness = lastHands.handedness?.[i]?.[0]?.categoryName || ('hand'+i);
+      const cls = classifyHand(lm);
+      const c = handCenter(lm); // normalized, NOT mirrored (image space)
+      // mirror to match our rendered/canvas space
+      const mx = 1 - c.x, my = c.y;
+      const size = handSize(lm);
+
+      const now = performance.now();
+      const prev = prevHandCenters[handedness];
+      let vx = 0, vy = 0;
+      if (prev){
+        const dt = Math.max(1, now - prev.t) / 1000;
+        vx = (mx - prev.x) / dt;
+        vy = (my - prev.y) / dt;
+      }
+      prevHandCenters[handedness] = { x: mx, y: my, t: now, cls };
+
+      const dToLight = Math.hypot(mx-light.x, my-light.y);
+      const catchRadius = light.radius * 2.6;
+
+      if (light.mode === 'free'){
+        if (cls === 'fist' && dToLight < catchRadius){
+          light.mode = 'held';
+          light.heldBy = handedness;
+        } else if (cls === 'open' && dToLight < catchRadius * 1.6){
+          // open palm pushes the light away (repel)
+          const dx = light.x - mx, dy = light.y - my;
+          const d = Math.max(0.02, Math.hypot(dx,dy));
+          const force = (catchRadius*1.6 - d) * 2.4;
+          light.vx += (dx/d) * force * 0.02;
+          light.vy += (dy/d) * force * 0.02;
+        }
+      } else if (light.mode === 'held' && light.heldBy === handedness){
+        // follow the fist, depth ~ hand size (bigger hand-box = closer to camera)
+        light.x += (mx - light.x) * 0.45;
+        light.y += (my - light.y) * 0.45;
+        light.z = Math.min(1, Math.max(0.25, size * 3.2));
+
+        const speed = Math.hypot(vx, vy);
+        const opened = cls === 'open' || cls === 'partial';
+        if (opened && speed > 0.9){
+          // toss!
+          light.mode = 'free';
+          light.heldBy = null;
+          light.vx = vx * 0.35;
+          light.vy = vy * 0.35;
+        } else if (opened && speed <= 0.9){
+          // gentle release, drop back to free with little velocity
+          light.mode = 'free';
+          light.heldBy = null;
+        }
+      }
+    }
+  }
+
+  // mouth interaction
+  if (lastFace && lastFace.faceLandmarks && lastFace.faceLandmarks.length > 0 && light.mode === 'free'){
+    const flm = lastFace.faceLandmarks[0];
+    const upper = flm[13], lower = flm[14], top = flm[10], chin = flm[152];
+    if (upper && lower && top && chin){
+      const faceH = dist(top, chin) || 0.001;
+      const openness = dist(upper, lower) / faceH;
+      const mouthX = 1 - (upper.x + lower.x)/2;
+      const mouthY = (upper.y + lower.y)/2;
+      const dToMouth = Math.hypot(mouthX-light.x, mouthY-light.y);
+      if (openness > 0.045 && dToMouth < light.radius * 2.2){
+        light.mode = 'eaten';
+        light.eatT = 0;
+      }
+    }
+  }
+}
+
+function updatePhysics(){
+  if (light.mode === 'free'){
+    // gentle float + gravity toward mid-height + drag
+    light.vy += 0.0009; // gravity
+    light.vx *= 0.94;
+    light.vy *= 0.94;
+    light.x += light.vx * 0.016;
+    light.y += light.vy * 0.016;
+
+    // ambient drift
+    light.x += Math.sin(performance.now()/1400) * 0.00035;
+    light.y += Math.cos(performance.now()/1700) * 0.00025;
+
+    // bounds bounce
+    const margin = light.radius;
+    if (light.x < margin){ light.x = margin; light.vx *= -0.4; }
+    if (light.x > 1-margin){ light.x = 1-margin; light.vx *= -0.4; }
+    if (light.y < margin){ light.y = margin; light.vy *= -0.4; }
+    if (light.y > 1-margin){ light.y = 1-margin; light.vy *= -0.4; }
+
+    // z relaxes back to a mid depth over time when free
+    light.z += (0.35 - light.z) * 0.01;
+  } else if (light.mode === 'eaten'){
+    light.eatT += 0.045;
+    light.radius = Math.max(0.001, 0.055 * (1 - light.eatT));
+    if (light.eatT >= 1){
+      light.radius = 0.055;
+      respawnLight();
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------
+   LIGHT RENDERING WITH DEPTH OCCLUSION
+--------------------------------------------------------------------- */
+const glowCanvas = document.createElement('canvas');
+const glowCtx = glowCanvas.getContext('2d');
+
+function drawLight(){
+  const cw = canvas.width, ch = canvas.height;
+  const minDim = Math.min(cw, ch);
+  const screenR = Math.max(4, light.radius * minDim * (0.55 + 0.9*light.z));
+  const glowR = screenR * 3.4;
+
+  const cx = light.x * cw, cy = light.y * ch;
+
+  const size = Math.ceil(glowR*2);
+  if (glowCanvas.width !== size || glowCanvas.height !== size){
+    glowCanvas.width = size; glowCanvas.height = size;
+  }
+  glowCtx.clearRect(0,0,size,size);
+
+  // paint the light glow itself onto offscreen canvas, centered
+  const gx = size/2, gy = size/2;
+  const grad = glowCtx.createRadialGradient(gx,gy,0, gx,gy, glowR);
+  grad.addColorStop(0,   'rgba(255,250,235,1)');
+  grad.addColorStop(0.18,'rgba(255,244,214,0.95)');
+  grad.addColorStop(0.5, 'rgba(255,225,170,0.28)');
+  grad.addColorStop(1,   'rgba(255,225,170,0)');
+  glowCtx.fillStyle = grad;
+  glowCtx.beginPath();
+  glowCtx.arc(gx,gy,glowR,0,Math.PI*2);
+  glowCtx.fill();
+
+  // depth-based occlusion mask: sample scene depth on a coarse grid within
+  // the glow's footprint; where scene is closer than the light, punch a hole.
+  if (state.depthMap){
+    glowCtx.save();
+    glowCtx.globalCompositeOperation = 'destination-out';
+    const steps = 14;
+    const cellW = size/steps, cellH = size/steps;
+    for (let iy=0; iy<steps; iy++){
+      for (let ix=0; ix<steps; ix++){
+        const localX = (ix+0.5)*cellW, localY = (iy+0.5)*cellH;
+        const dCenter = Math.hypot(localX-gx, localY-gy);
+        if (dCenter > glowR) continue;
+        const worldX = cx - glowR + localX;
+        const worldY = cy - glowR + localY;
+        const nx = worldX / cw, ny = worldY / ch;
+        if (nx<0||nx>1||ny<0||ny>1) continue;
+        const sceneDepth = sampleDepth(nx, ny);
+        if (sceneDepth > light.z + 0.04){
+          // occluded — erase this cell (soft edge via slightly larger alpha circle)
+          const falloff = 1 - Math.min(1, dCenter/glowR);
+          glowCtx.globalAlpha = Math.min(1, (sceneDepth - light.z) * 3.2);
+          glowCtx.beginPath();
+          glowCtx.arc(localX, localY, Math.max(cellW,cellH)*0.9, 0, Math.PI*2);
+          glowCtx.fill();
+        }
+      }
+    }
+    glowCtx.restore();
+    glowCtx.globalAlpha = 1;
+  }
+
+  // composite onto main canvas, additive for a light-like bloom
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.drawImage(glowCanvas, cx - size/2, cy - size/2);
+  ctx.restore();
+
+  // crisp core so it still reads clearly at small sizes
+  if (!state.depthMap || sampleDepth(light.x, light.y) <= light.z + 0.04){
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = 'rgba(255,252,242,0.95)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, screenR*0.32, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+</script>
+</body>
 </html>
