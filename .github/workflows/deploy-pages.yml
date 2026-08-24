@@ -14,9 +14,6 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
-env:
-  NODE_VERSION: 20
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -27,29 +24,20 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: 20
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm install
 
-      - name: Setup GitHub Pages
+      - name: Setup Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
-      - name: Build Vite application
+      - name: Build
         run: npm run build
-
-      - name: Verify Pages output
-        run: |
-          test -f dist/index.html
-          echo "Pages artifact ready:"
-          find dist -maxdepth 2 -type f | head -50
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          name: github-pages
           path: ./dist
 
   deploy:
