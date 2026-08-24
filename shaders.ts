@@ -28,7 +28,7 @@ fn scenePoint(uv:vec2f,z:f32)->vec3f{let aspect=f32(frame.width)/f32(frame.heigh
 @fragment fn composite(in:VSOut)->@location(0)vec4f{
  let src=textureSampleBaseClampToEdge(camera,videoSampler,in.uv).rgb;let p=vec2i(clamp(in.uv*vec2f(f32(frame.width),f32(frame.height)),vec2f(0),vec2f(f32(frame.width-1u),f32(frame.height-1u))));let z=textureLoad(depth,p,0).x;let n=normalize(textureLoad(normals,p,0).xyz*2.0-1.0);let sh=textureLoad(shadow,p,0).x;
  let surface=scenePoint(in.uv,z);let lp=scenePoint(vec2f(frame.lightX,frame.lightY),frame.lightZ);let L=lp-surface;let distance=max(.035,length(L));let ldir=L/distance;let lambert=max(dot(n,ldir),0.0);
- let inverseSquare=1.0/(distance*distance+.055);let darkness=1.0-clamp(frame.sceneLuma,0.0,1.0);let darkRoomGain=1.0+darkness*darkness*1.8;let depthSurfaceGain=.55+.75*smoothstep(.95,.18,z);let direct=lambert*inverseSquare*frame.lightIntensity*darkRoomGain*.075*depthSurfaceGain;let lit=src+src*direct*(1.0-sh*.94);
+ let inverseSquare=1.0/(distance*distance+.055);let darkness=1.0-clamp(frame.sceneLuma,0.0,1.0);let darkRoomGain=1.0+darkness*darkness*1.8;let nearFactor=1.0-smoothstep(.12,.92,z);let depthSurfaceGain=.55+.75*nearFactor;let direct=lambert*inverseSquare*frame.lightIntensity*darkRoomGain*.075*depthSurfaceGain;let lit=src+src*direct*(1.0-sh*.94);
  let aspect=f32(frame.width)/f32(frame.height);let d=length(vec2f((frame.lightX-in.uv.x)*aspect,frame.lightY-in.uv.y));let coreRadius=.018+.006*frame.lightZ;let core=1.0-smoothstep(coreRadius,coreRadius+.002,d);let bulb=vec3f(1.0,.955,.82)*core*1.35;
  return vec4f(clamp(lit+bulb,vec3f(0),vec3f(1)),1);
 }`;
