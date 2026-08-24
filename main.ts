@@ -1,6 +1,7 @@
 import './style.css';
 import { compositeShader, inferenceShader, normalShader } from './shaders';
 import { FilesetResolver, HandLandmarker, type HandLandmarkerResult } from '@mediapipe/tasks-vision';
+import { d } from 'typegpu';
 import { Frame, initTypeGPU } from './typegpu-bridge';
 
 const OUTPUT_WIDTH = 960;
@@ -30,11 +31,9 @@ let lastSample = performance.now();
 let frames = 0;
 let checkFirstFrame = true;
 
-// The light's current on-screen position.
 let lightX = 0.5;
 let lightY = 0.35;
 
-// --- MediaPipe hand tracking ---
 let handLandmarker: HandLandmarker | null = null;
 let handTrackerReady = false;
 
@@ -55,16 +54,12 @@ async function setupHandTracking(): Promise<void> {
   handTrackerReady = true;
 }
 
-// Palm center: average of the wrist and the four finger base knuckles.
 const PALM_LANDMARKS = [0, 5, 9, 13, 17];
 type Point = { x: number; y: number };
-
-// Previous-frame palm positions, used to compute each hand's velocity.
 const prevPalm: (Point | null)[] = [null, null];
 const palmVelocity: Point[] = [{ x: 0, y: 0 }, { x: 0, y: 0 }];
 let currentPalms: (Point | null)[] = [null, null];
 
-// --- Throw/catch physics state ---
 type LightState = 'held' | 'free';
 let lightState: LightState = 'held';
 let heldHandIndex = 0;
@@ -175,8 +170,6 @@ async function initialize(): Promise<void> {
   resources = {
     depth: makeTexture('r32float'),
     normal: makeTexture('rgba16float'),
-    // The existing bind groups continue to receive the underlying GPUBuffer.
-    // TypeGPU owns the typed schema and CPU-side writes for incremental adoption.
     uniform: frameUniform.buffer,
     videoSampler: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }),
   };
