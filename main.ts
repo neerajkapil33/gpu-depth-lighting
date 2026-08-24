@@ -1,7 +1,220 @@
-import { compositeShader, normalShader, shadowShader } from './shaders';
+import { d, tgpu } from 'typegpu';
 import { FilesetResolver, HandLandmarker, type HandLandmarkerResult } from '@mediapipe/tasks-vision';
-import { initTypeGPU } from './typegpu-bridge';
-import { estimateVideoDepth, getDepthAt, getSceneLuma, loadDepthModel, isDepthReady } from './depth-estimator';
-import { setupLightInput } from './light-input';
-import { colorToRgb, defaultRelightingSettings, type RelightingSettings } from './renderer';
-const W=960,H=540,WG=8;const canvas=document.querySelector<HTMLCanvasElement>('#output')!;const video=document.querySelector<HTMLVideoElement>('#video')!;const start=document.querySelector<HTMLButtonElement>('#start')!;const status=document.querySelector<HTMLElement>('#status')!;const cpuMs=document.querySelector<HTMLElement>('#cpu-ms')!;const fpsEl=document.querySelector<HTMLElement>('#fps')!;const inputSize=document.querySelector<HTMLElement>('#input-size')!;const handIndicator=document.querySelector<HTMLElement>('#hand-indicator')!;const bulb=document.querySelector<HTMLElement>('#bulb')!;const lightField=document.querySelector<HTMLElement>('#light-field')!;const settings:RelightingSettings={...defaultRelightingSettings,lightPosition:[...defaultRelightingSettings.lightPosition],lightColor:[...defaultRelightingSettings.lightColor]};let lightActive=false;let gpu:Gpu;let hand:HandLandmarker|null=null;let lightX=.5,lightY=.44,lightZ=.42,lastDepthAt=0,depthInFlight=false,lastFrame=performance.now(),frameCount=0,cameraRunning=false,visionLoading=false,palms:{x:number,y:number}[]=[];type Gpu={device:GPUDevice;context:GPUCanvasContext;format:GPUTextureFormat;depth:GPUTexture;normal:GPUTexture;shadow:GPUTexture;sampler:GPUSampler;normals:GPUComputePipeline;shadows:GPUComputePipeline;composite:GPURenderPipeline;uniformBuffer:GPUBuffer};const inputAbort=new AbortController();const lightInput=setupLightInput(canvas,u=>{if(u.lightPosition){lightX=u.lightPosition[0];lightY=u.lightPosition[1];settings.lightPosition=[lightX,lightY]}if(u.lightZ!==undefined){lightZ=u.lightZ;settings.lightZ=lightZ}},inputAbort.signal);function el<T extends HTMLElement>(id:string){return document.getElementById(id) as T}function setStatus(m:string){status.textContent=m}function setLightActive(on:boolean){lightActive=on;const b=el<HTMLButtonElement>('light-toggle');b.textContent=on?'Virtual bulb ON · click to disable':'Activate virtual bulb';b.classList.toggle('active',on);setStatus(on?'3D bulb ACTIVE · point light + depth shadows':'3D bulb visible · light OFF')}function bindControls(){const ranges=[['ctrl-intensity','intensity','ctrl-intensity-v'],['ctrl-ambient','ambient','ctrl-ambient-v'],['ctrl-relief','relief','ctrl-relief-v'],['ctrl-shadow','shadow','ctrl-shadow-v'],['ctrl-occlusion','occlusion','ctrl-occlusion-v']] as const;for(const [id,key,out] of ranges){const input=el<HTMLInputElement>(id),output=el<HTMLOutputElement>(out);input.addEventListener('input',()=>{(settings as any)[key]=Number(input.value);output.value=Number(input.value).toFixed(key==='intensity'?1:2)})}const mainIntensity=el<HTMLInputElement>('intensity');mainIntensity.addEventListener('input',()=>{settings.intensity=Number(mainIntensity.value);el<HTMLElement>('intensity-value').textContent=settings.intensity.toFixed(1);el<HTMLInputElement>('ctrl-intensity').value=String(settings.intensity);el<HTMLOutputElement>('ctrl-intensity-v').value=settings.intensity.toFixed(1)});el<HTMLButtonElement>('light-toggle').addEventListener('click',()=>setLightActive(!lightActive));el<HTMLButtonElement>('controls-toggle').addEventListener('click',()=>el<HTMLElement>('controls-panel').classList.toggle('open'));el<HTMLInputElement>('ctrl-color').addEventListener('input',e=>settings.lightColor=colorToRgb((e.target as HTMLInputElement).value));el<HTMLSelectElement>('ctrl-view').addEventListener('change',e=>settings.view=(e.target as HTMLSelectElement).value as 'relit'|'camera');el<HTMLSelectElement>('ctrl-camera').addEventListener('change',e=>settings.camera=(e.target as HTMLSelectElement).value as 'front'|'mirror');el<HTMLSelectElement>('ctrl-source').addEventListener('change',e=>{const v=(e.target as HTMLSelectElement).value;settings.view=v==='camera'?'camera':'relit';el<HTMLSelectElement>('ctrl-view').value=settings.view});el<HTMLButtonElement>('ctrl-reset').addEventListener('click',()=>{Object.assign(settings,{lightPosition:[...defaultRelightingSettings.lightPosition],lightZ:defaultRelightingSettings.lightZ,intensity:defaultRelightingSettings.intensity,ambient:defaultRelightingSettings.ambient,relief:defaultRelightingSettings.relief,shadow:defaultRelightingSettings.shadow,occlusion:defaultRelightingSettings.occlusion,lightColor:[...defaultRelightingSettings.lightColor],view:'relit',camera:'front'});lightX=settings.lightPosition[0];lightY=settings.lightPosition[1];lightZ=settings.lightZ;el<HTMLInputElement>('ctrl-intensity').value=String(settings.intensity);el<HTMLOutputElement>('ctrl-intensity-v').value=settings.intensity.toFixed(1);mainIntensity.value=String(settings.intensity);el<HTMLElement>('intensity-value').textContent=settings.intensity.toFixed(1);setLightActive(false)})}function updateBulb(hidden=false){const w=canvas.clientWidth||W,h=canvas.clientHeight||H;bulb.style.left=`${lightX*w}px`;bulb.style.top=`${lightY*h}px`;const size=Math.max(42,Math.min(112,66/(.35+lightZ)));bulb.style.width=`${size}px`;bulb.style.height=`${size}px`;bulb.style.opacity=hidden?'0':'1';const c=settings.lightColor.map(v=>Math.round(v*255));const css=`rgb(${c[0]},${c[1]},${c[2]})`;bulb.style.background=`radial-gradient(circle at 35% 30%,#fff 0 8%,${css} 25%,${css} 58%,transparent 78%)`;bulb.style.filter=`drop-shadow(0 0 10px ${css}) drop-shadow(0 0 30px ${css})`;lightField.style.opacity=hidden||!lightActive?'0':String(Math.min(.55,.12+settings.intensity*.07));lightField.style.background=`radial-gradient(circle at ${lightX*100}% ${lightY*100}%,rgba(${c[0]},${c[1]},${c[2]},.28) 0%,rgba(${c[0]},${c[1]},${c[2]},.08) 25%,transparent 60%)`}function visionSetup(){return FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm').then(v=>HandLandmarker.createFromOptions(v,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',delegate:'GPU'},runningMode:'VIDEO',numHands:2})).then(h=>{hand=h})}function track(now:number){palms=[];let nearest=1;if(hand){const r:HandLandmarkerResult=hand.detectForVideo(video,now);for(const lm of r.landmarks.slice(0,2)){let x=0,y=0;for(const j of [0,5,9,13,17]){x+=lm[j].x;y+=lm[j].y}const p={x:x/5,y:y/5};palms.push(p);nearest=Math.min(nearest,getDepthAt(p.x,p.y))}}if(lightActive){const p=palms[0];if(p){lightX=p.x;lightY=p.y;lightZ=Math.max(.10,Math.min(1.25,getDepthAt(p.x,p.y)-.06));settings.lightPosition=[lightX,lightY];settings.lightZ=lightZ;handIndicator.style.display='block';handIndicator.style.left=`${lightX*canvas.clientWidth}px`;handIndicator.style.top=`${lightY*canvas.clientHeight}px`}else{handIndicator.style.display='none';lightInput.orbitTick()}}else handIndicator.style.display='none';updateBulb(lightActive&&palms.length>0&&nearest<lightZ-.025)}function tex(format:GPUTextureFormat,usage:GPUTextureUsageFlags){return gpu.device.createTexture({size:[W,H],format,usage,label:`orbit-${format}`})}async function init(){if(!navigator.gpu)throw Error('WebGPU is not available. Use Chrome or Edge with WebGPU enabled.');const adapter=await navigator.gpu.requestAdapter();if(!adapter)throw Error('No GPU adapter.');const device=await adapter.requestDevice();device.addEventListener('uncapturederror',e=>{console.error(e.error);setStatus(`GPU error: ${e.error.message}`)});device.lost.then(info=>setStatus(`GPU lost: ${info.message||info.reason}`));initTypeGPU(device);const context=canvas.getContext('webgpu')!;const format=navigator.gpu.getPreferredCanvasFormat();context.configure({device,format,alphaMode:'premultiplied'});gpu={device,context,format,depth:null as never,normal:null as never,shadow:null as never,sampler:null as never,normals:null as never,shadows:null as never,composite:null as never,uniformBuffer:null as never};gpu.depth=tex('r32float',GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST);gpu.normal=tex('rgba16float',GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.STORAGE_BINDING);gpu.shadow=tex('r32float',GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.STORAGE_BINDING);gpu.sampler=device.createSampler({magFilter:'linear',minFilter:'linear'});gpu.uniformBuffer=device.createBuffer({size:64,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});const n=device.createShaderModule({code:normalShader}),s=device.createShaderModule({code:shadowShader}),c=device.createShaderModule({code:compositeShader});gpu.normals=device.createComputePipeline({layout:'auto',compute:{module:n,entryPoint:'reconstructNormals'}});gpu.shadows=device.createComputePipeline({layout:'auto',compute:{module:s,entryPoint:'projectShadow'}});gpu.composite=device.createRenderPipeline({layout:'auto',vertex:{module:c,entryPoint:'fullscreen'},fragment:{module:c,entryPoint:'composite',targets:[{format}]},primitive:{topology:'triangle-list'}})}function uploadDepth(depth:Float32Array){const buffer=new ArrayBuffer(depth.byteLength);new Float32Array(buffer).set(depth);gpu.device.queue.writeTexture({texture:gpu.depth},new Float32Array(buffer),{bytesPerRow:W*4,rowsPerImage:H},{width:W,height:H,depthOrArrayLayers:1})}function writeFrameUniform(now:number){const data=new ArrayBuffer(64),v=new DataView(data);v.setUint32(0,W,true);v.setUint32(4,H,true);v.setFloat32(8,now/1000,true);v.setFloat32(12,getSceneLuma(),true);v.setFloat32(16,lightX,true);v.setFloat32(20,lightY,true);v.setFloat32(24,lightZ,true);v.setFloat32(28,lightActive?settings.intensity:0,true);v.setFloat32(32,settings.ambient,true);v.setFloat32(36,settings.relief,true);v.setFloat32(40,settings.shadow,true);v.setFloat32(44,settings.occlusion,true);v.setFloat32(48,settings.lightColor[0],true);v.setFloat32(52,settings.lightColor[1],true);v.setFloat32(56,settings.lightColor[2],true);let flags=0;if(settings.view==='camera')flags|=1;if(settings.camera==='mirror')flags|=2;if(el<HTMLSelectElement>('ctrl-source').value==='camera')flags|=4;v.setUint32(60,flags,true);gpu.device.queue.writeBuffer(gpu.uniformBuffer,0,data)}function render(now:number){if(!cameraRunning||video.readyState<HTMLMediaElement.HAVE_CURRENT_DATA){requestAnimationFrame(render);return}try{track(now);if(isDepthReady()&&!depthInFlight&&now-lastDepthAt>110){depthInFlight=true;lastDepthAt=now;estimateVideoDepth(video,W,H).then(d=>{if(d)uploadDepth(d)}).catch(e=>setStatus(`Depth runtime error: ${(e as Error).message}`)).finally(()=>depthInFlight=false)}writeFrameUniform(now);const dev=gpu.device,enc=dev.createCommandEncoder({label:'depth-space-physical-point-light'}),ub:GPUBufferBinding={buffer:gpu.uniformBuffer};const np=enc.beginComputePass();np.setPipeline(gpu.normals);np.setBindGroup(0,dev.createBindGroup({layout:gpu.normals.getBindGroupLayout(0),entries:[{binding:0,resource:gpu.depth.createView()},{binding:1,resource:gpu.normal.createView()},{binding:2,resource:ub}]}));np.dispatchWorkgroups(Math.ceil(W/WG),Math.ceil(H/WG));np.end();const sp=enc.beginComputePass();sp.setPipeline(gpu.shadows);sp.setBindGroup(0,dev.createBindGroup({layout:gpu.shadows.getBindGroupLayout(0),entries:[{binding:0,resource:gpu.depth.createView()},{binding:1,resource:gpu.shadow.createView()},{binding:2,resource:ub}]}));sp.dispatchWorkgroups(Math.ceil(W/WG),Math.ceil(H/WG));sp.end();const pass=enc.beginRenderPass({colorAttachments:[{view:gpu.context.getCurrentTexture().createView(),loadOp:'clear',storeOp:'store',clearValue:[0,0,0,0]}]});pass.setPipeline(gpu.composite);pass.setBindGroup(0,dev.createBindGroup({layout:gpu.composite.getBindGroupLayout(0),entries:[{binding:0,resource:dev.importExternalTexture({source:video})},{binding:1,resource:gpu.sampler},{binding:2,resource:gpu.depth.createView()},{binding:3,resource:gpu.normal.createView()},{binding:4,resource:gpu.shadow.createView()},{binding:5,resource:ub}]}));pass.draw(3);pass.end();dev.queue.submit([enc.finish()]);cpuMs.textContent=`${(performance.now()-now).toFixed(1)} ms`;frameCount++;if(now-lastFrame>500){fpsEl.textContent=`${Math.round(frameCount*1000/(now-lastFrame))} fps`;frameCount=0;lastFrame=now}}catch(e){console.error(e);setStatus(`GPU render error: ${(e as Error).message}`)}requestAnimationFrame(render)}start.addEventListener('click',async()=>{if(cameraRunning)return;try{start.disabled=true;setStatus('Requesting camera permission…');const stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280},height:{ideal:720},facingMode:'user'},audio:false});video.srcObject=stream;await video.play();cameraRunning=true;inputSize.textContent=`${video.videoWidth}×${video.videoHeight}`;setStatus('Camera ready · activate the virtual bulb from Controls');requestAnimationFrame(render);if(!visionLoading){visionLoading=true;visionSetup().catch(e=>setStatus(`Vision unavailable: ${(e as Error).message}`))}if(!isDepthReady()){loadDepthModel(m=>setStatus(m)).then(()=>setStatus('Depth Anything V2 ready · activate the virtual bulb')).catch(e=>setStatus(`Depth unavailable: ${(e as Error).message}`))}}catch(e){start.disabled=false;setStatus(`Camera failed: ${(e as Error).message}`)}});bindControls();(async()=>{try{setStatus('Initializing WebGPU + TypeGPU…');await init();start.disabled=false;setStatus('Ready — start camera.')}catch(e){start.disabled=true;setStatus((e as Error).message)}})();
+import { DepthInferencePlan } from './vendor/typegpu-depth/inference/depthart.ts';
+import { parseDepthBundle } from './vendor/typegpu-depth/inference/bundle.ts';
+import { fetchModel, modelVariant, RECOMMENDED_MODEL } from './vendor/typegpu-depth/model-store.ts';
+import { DepthRelightingRenderer, defaultRelightingSettings } from './vendor/typegpu-depth/renderer.ts';
+import { RelightMode } from './vendor/typegpu-depth/shaders.ts';
+import { setupLightInput } from './light-input.ts';
+
+const canvas = document.querySelector<HTMLCanvasElement>('#output')!;
+const video = document.querySelector<HTMLVideoElement>('#video')!;
+const start = document.querySelector<HTMLButtonElement>('#start')!;
+const status = document.querySelector<HTMLElement>('#status')!;
+const bulb = document.querySelector<HTMLElement>('#bulb')!;
+const handIndicator = document.querySelector<HTMLElement>('#hand-indicator')!;
+const cpuMs = document.querySelector<HTMLElement>('#cpu-ms');
+const fpsEl = document.querySelector<HTMLElement>('#fps');
+const inputSize = document.querySelector<HTMLElement>('#input-size');
+
+let root: Awaited<ReturnType<typeof tgpu.init>> | undefined;
+let renderer: DepthRelightingRenderer | undefined;
+let plan: DepthInferencePlan | undefined;
+let hand: HandLandmarker | undefined;
+let running = false;
+let lightActive = false;
+let handVisible = false;
+let last = performance.now();
+let frames = 0;
+
+const settings = {
+  ...defaultRelightingSettings,
+  lightPosition: [...defaultRelightingSettings.lightPosition] as [number, number],
+  lightColor: [...defaultRelightingSettings.lightColor] as [number, number, number],
+};
+
+function setStatus(text: string) { status.textContent = text; }
+
+function el<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
+
+function setLightActive(on: boolean) {
+  lightActive = on;
+  settings.intensity = on ? Math.max(settings.intensity, 3) : 0;
+  renderer?.update({ intensity: settings.intensity });
+  const button = document.getElementById('light-toggle') as HTMLButtonElement | null;
+  if (button) {
+    button.textContent = on ? 'Virtual bulb ON · click to disable' : 'Activate virtual bulb';
+    button.classList.toggle('active', on);
+  }
+  setStatus(on ? 'Virtual 3D point light active · GPU depth relighting ON' : 'Virtual bulb visible · light OFF');
+}
+
+function updateBulb() {
+  const x = settings.lightPosition[0] * canvas.clientWidth;
+  const y = settings.lightPosition[1] * canvas.clientHeight;
+  bulb.style.left = `${x}px`;
+  bulb.style.top = `${y}px`;
+  bulb.style.opacity = handVisible ? '0' : '1';
+  bulb.style.transform = 'translate(-50%, -50%)';
+  const [r, g, b] = settings.lightColor.map(v => Math.round(v * 255));
+  bulb.style.filter = `drop-shadow(0 0 12px rgb(${r},${g},${b})) drop-shadow(0 0 32px rgb(${r},${g},${b}))`;
+}
+
+function bindControls() {
+  const ranges = [
+    ['ctrl-intensity', 'intensity', 'ctrl-intensity-v'],
+    ['ctrl-ambient', 'exposure', 'ctrl-ambient-v'],
+    ['ctrl-relief', 'relief', 'ctrl-relief-v'],
+    ['ctrl-shadow', 'shadow', 'ctrl-shadow-v'],
+    ['ctrl-occlusion', 'occlusion', 'ctrl-occlusion-v'],
+  ] as const;
+  for (const [id, key, out] of ranges) {
+    const input = document.getElementById(id) as HTMLInputElement | null;
+    const output = document.getElementById(out) as HTMLOutputElement | null;
+    input?.addEventListener('input', () => {
+      const value = Number(input.value);
+      (settings as any)[key] = value;
+      output && (output.value = value.toFixed(key === 'intensity' ? 1 : 2));
+      renderer?.update({ [key]: value });
+    });
+  }
+  document.getElementById('light-toggle')?.addEventListener('click', () => setLightActive(!lightActive));
+  document.getElementById('controls-toggle')?.addEventListener('click', () => el<HTMLElement>('controls-panel').classList.toggle('open'));
+  document.getElementById('ctrl-color')?.addEventListener('input', e => {
+    const hex = (e.target as HTMLInputElement).value;
+    const n = parseInt(hex.slice(1), 16);
+    settings.lightColor = [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+    renderer?.update({ lightColor: settings.lightColor });
+    updateBulb();
+  });
+  document.getElementById('ctrl-view')?.addEventListener('change', e => {
+    const value = (e.target as HTMLSelectElement).value;
+    renderer?.update({ mode: value === 'camera' ? RelightMode.CAMERA : RelightMode.RELIT });
+  });
+  document.getElementById('ctrl-camera')?.addEventListener('change', e => {
+    const mirror = (e.target as HTMLSelectElement).value === 'front';
+    settings.mirror = mirror;
+    renderer?.update({ mirror });
+  });
+  document.getElementById('ctrl-source')?.addEventListener('change', e => {
+    const value = (e.target as HTMLSelectElement).value;
+    renderer?.update({ mode: value === 'camera' ? RelightMode.CAMERA : RelightMode.RELIT });
+  });
+  document.getElementById('ctrl-reset')?.addEventListener('click', () => {
+    Object.assign(settings, {
+      ...defaultRelightingSettings,
+      lightPosition: [...defaultRelightingSettings.lightPosition] as [number, number],
+      lightColor: [...defaultRelightingSettings.lightColor] as [number, number, number],
+    });
+    renderer?.update(settings);
+    setLightActive(false);
+    updateBulb();
+  });
+}
+
+async function setupHand() {
+  const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm');
+  hand = await HandLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+      delegate: 'GPU',
+    },
+    runningMode: 'VIDEO',
+    numHands: 2,
+  });
+}
+
+function updatePalm(now: number) {
+  if (!hand || !lightActive) {
+    handVisible = false;
+    handIndicator.style.display = 'none';
+    return;
+  }
+  const result: HandLandmarkerResult = hand.detectForVideo(video, now);
+  const lm = result.landmarks[0];
+  if (!lm) {
+    handVisible = false;
+    handIndicator.style.display = 'none';
+    return;
+  }
+  let x = 0, y = 0;
+  for (const i of [0, 5, 9, 13, 17]) { x += lm[i].x; y += lm[i].y; }
+  x /= 5; y /= 5;
+  settings.lightPosition = [x, y];
+  renderer?.update({ lightPosition: settings.lightPosition });
+  handVisible = true;
+  handIndicator.style.display = 'block';
+  handIndicator.style.left = `${x * canvas.clientWidth}px`;
+  handIndicator.style.top = `${y * canvas.clientHeight}px`;
+}
+
+async function loadDepthModel() {
+  if (!root) throw new Error('TypeGPU root is not initialized');
+  const hasF16 = root.device.features.has('shader-f16');
+  const variant = modelVariant(RECOMMENDED_MODEL, hasF16);
+  if (!variant) throw new Error('No compatible DepthART model variant available.');
+  setStatus(`Downloading TypeGPU DepthART ${RECOMMENDED_MODEL} model (${variant.megabytes} MB)…`);
+  const bundle = parseDepthBundle(await fetchModel(variant, new AbortController().signal));
+  plan = new DepthInferencePlan(root, bundle);
+  await plan.initAsync();
+  renderer = new DepthRelightingRenderer(root, canvas);
+  await renderer.initAsync();
+  renderer.attach(plan);
+  renderer.update(settings);
+  setStatus('GPU depth model ready · activate the virtual bulb');
+}
+
+function frame(now: number) {
+  if (!running || !renderer) return;
+  const t0 = performance.now();
+  updatePalm(now);
+  if (lightActive && !handVisible) {
+    lightInput.orbitTick();
+  }
+  renderer.update({ lightPosition: settings.lightPosition, lightZ: settings.lightZ });
+  renderer.render({ source: video, uvTransform: d.mat2x2f.identity(), swapAxes: false });
+  updateBulb();
+  frames++;
+  if (now - last > 500) {
+    fpsEl && (fpsEl.textContent = `${Math.round(frames * 1000 / (now - last))} fps`);
+    frames = 0;
+    last = now;
+  }
+  cpuMs && (cpuMs.textContent = `${(performance.now() - t0).toFixed(1)} ms`);
+  requestAnimationFrame(frame);
+}
+
+const lightInput = setupLightInput(canvas, update => {
+  if (update.lightPosition) {
+    settings.lightPosition = [...update.lightPosition] as [number, number];
+    renderer?.update({ lightPosition: settings.lightPosition });
+  }
+  if (update.lightZ !== undefined) {
+    settings.lightZ = update.lightZ;
+    renderer?.update({ lightZ: settings.lightZ });
+  }
+}, new AbortController().signal);
+
+start.addEventListener('click', async () => {
+  if (running) return;
+  try {
+    start.disabled = true;
+    setStatus('Requesting camera…');
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+    inputSize && (inputSize.textContent = `${video.videoWidth}×${video.videoHeight}`);
+    root = await tgpu.init({ device: { optionalFeatures: ['shader-f16'] } });
+    await loadDepthModel();
+    running = true;
+    setLightActive(false);
+    requestAnimationFrame(frame);
+    void setupHand().catch(() => setStatus('Depth model ready · palm control unavailable, mouse control remains active'));
+  } catch (error) {
+    start.disabled = false;
+    setStatus(`Startup failed: ${(error as Error).message}`);
+  }
+});
+
+bindControls();
+setStatus('Ready — start camera.');
