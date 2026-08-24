@@ -3,7 +3,8 @@ import { dirname, join } from 'node:path';
 
 const API_ROOT='https://api.github.com/repos/software-mansion/TypeGPU/contents/apps/typegpu-docs/src/examples/image-processing/monocular-light-injection';
 const RAW_ROOT='https://raw.githubusercontent.com/software-mansion/TypeGPU/main/apps/typegpu-docs/src/examples/image-processing/monocular-light-injection';
-const DEST='src/vendor/typegpu-depth';
+// main.ts imports the runtime from the repository root, so vendor it there.
+const DEST='vendor/typegpu-depth';
 
 async function list(path=''){
   const url=path?`${API_ROOT}/${path}`:API_ROOT;
