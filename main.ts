@@ -1,5 +1,6 @@
 import { d, tgpu } from 'typegpu';
 import { FilesetResolver, HandLandmarker, type HandLandmarkerResult } from '@mediapipe/tasks-vision';
+import { DepthCameraSession } from './vendor/typegpu-depth/camera-session.ts';
 import { DepthInferencePlan } from './vendor/typegpu-depth/inference/depthart.ts';
 import { parseDepthBundle } from './vendor/typegpu-depth/inference/bundle.ts';
 import { fetchModel, modelVariant, RECOMMENDED_MODEL } from './vendor/typegpu-depth/model-store.ts';
@@ -33,33 +34,48 @@ const settings = {
   lightColor: [...defaultRelightingSettings.lightColor] as [number, number, number],
 };
 
-function setStatus(text: string) { status.textContent = text; }
-function el<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
+function setStatus(text: string): void {
+  status.textContent = text;
+}
 
-function setLightActive(on: boolean) {
+function el<T extends HTMLElement>(id: string): T {
+  return document.getElementById(id) as T;
+}
+
+function syncRenderer(): void {
+  renderer?.update({
+    lightPosition: settings.lightPosition,
+    lightZ: settings.lightZ,
+    intensity: lightActive ? settings.intensity : 0,
+    exposure: settings.exposure,
+    relief: settings.relief,
+    shadow: settings.shadow,
+    occlusion: settings.occlusion,
+    lightColor: settings.lightColor,
+    mirror: settings.mirror,
+    mode: settings.mode,
+  });
+}
+
+function setLightActive(on: boolean): void {
   lightActive = on;
-  settings.intensity = on ? Math.max(settings.intensity, 3) : 0;
-  renderer?.update({ intensity: settings.intensity });
+  syncRenderer();
   const button = document.getElementById('light-toggle') as HTMLButtonElement | null;
   if (button) {
     button.textContent = on ? 'Virtual bulb ON · click to disable' : 'Activate virtual bulb';
     button.classList.toggle('active', on);
   }
-  setStatus(on ? 'Virtual 3D point light active · GPU depth relighting ON' : 'Virtual bulb visible · light OFF');
+  setStatus(on ? '3D GPU point light ACTIVE · depth-aware relighting ON' : 'Depth camera ready · activate the virtual bulb');
 }
 
-function updateBulb() {
-  const x = settings.lightPosition[0] * canvas.clientWidth;
-  const y = settings.lightPosition[1] * canvas.clientHeight;
-  bulb.style.left = `${x}px`;
-  bulb.style.top = `${y}px`;
-  bulb.style.opacity = handVisible ? '0' : '1';
-  bulb.style.transform = 'translate(-50%, -50%)';
-  const [r, g, b] = settings.lightColor.map((v: number) => Math.round(v * 255));
-  bulb.style.filter = `drop-shadow(0 0 12px rgb(${r},${g},${b})) drop-shadow(0 0 32px rgb(${r},${g},${b}))`;
+function updateBulb(): void {
+  // The actual bulb is rendered by the TypeGPU relight fragment. Keep the DOM marker
+  // hidden so it cannot be mistaken for the GPU light source.
+  bulb.style.display = 'none';
+  handIndicator.style.display = handVisible ? 'block' : 'none';
 }
 
-function bindControls() {
+function bindControls(): void {
   const ranges = [
     ['ctrl-intensity', 'intensity', 'ctrl-intensity-v'],
     ['ctrl-ambient', 'exposure', 'ctrl-ambient-v'],
@@ -67,51 +83,58 @@ function bindControls() {
     ['ctrl-shadow', 'shadow', 'ctrl-shadow-v'],
     ['ctrl-occlusion', 'occlusion', 'ctrl-occlusion-v'],
   ] as const;
+
   for (const [id, key, out] of ranges) {
     const input = document.getElementById(id) as HTMLInputElement | null;
     const output = document.getElementById(out) as HTMLOutputElement | null;
     input?.addEventListener('input', () => {
       const value = Number(input.value);
       (settings as any)[key] = value;
-      output && (output.value = value.toFixed(key === 'intensity' ? 1 : 2));
-      renderer?.update({ [key]: value });
+      if (output) output.value = value.toFixed(key === 'intensity' ? 1 : 2);
+      syncRenderer();
     });
   }
+
   document.getElementById('light-toggle')?.addEventListener('click', () => setLightActive(!lightActive));
   document.getElementById('controls-toggle')?.addEventListener('click', () => el<HTMLElement>('controls-panel').classList.toggle('open'));
-  document.getElementById('ctrl-color')?.addEventListener('input', e => {
-    const hex = (e.target as HTMLInputElement).value;
-    const n = parseInt(hex.slice(1), 16);
+
+  document.getElementById('ctrl-color')?.addEventListener('input', (event) => {
+    const hex = (event.target as HTMLInputElement).value;
+    const n = Number.parseInt(hex.slice(1), 16);
     settings.lightColor = [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-    renderer?.update({ lightColor: settings.lightColor });
-    updateBulb();
+    syncRenderer();
   });
-  document.getElementById('ctrl-view')?.addEventListener('change', e => {
-    const value = (e.target as HTMLSelectElement).value;
-    renderer?.update({ mode: value === 'camera' ? RelightMode.CAMERA : RelightMode.RELIT });
+
+  document.getElementById('ctrl-view')?.addEventListener('change', (event) => {
+    const value = (event.target as HTMLSelectElement).value;
+    settings.mode = value === 'camera' ? RelightMode.CAMERA : RelightMode.RELIT;
+    syncRenderer();
   });
-  document.getElementById('ctrl-camera')?.addEventListener('change', e => {
-    const mirror = (e.target as HTMLSelectElement).value === 'front';
-    settings.mirror = mirror;
-    renderer?.update({ mirror });
+
+  document.getElementById('ctrl-camera')?.addEventListener('change', (event) => {
+    settings.mirror = (event.target as HTMLSelectElement).value === 'front';
+    syncRenderer();
   });
-  document.getElementById('ctrl-source')?.addEventListener('change', e => {
-    const value = (e.target as HTMLSelectElement).value;
-    renderer?.update({ mode: value === 'camera' ? RelightMode.CAMERA : RelightMode.RELIT });
+
+  document.getElementById('ctrl-source')?.addEventListener('change', (event) => {
+    const value = (event.target as HTMLSelectElement).value;
+    settings.mode = value === 'camera' ? RelightMode.CAMERA : RelightMode.RELIT;
+    syncRenderer();
   });
+
   document.getElementById('ctrl-reset')?.addEventListener('click', () => {
     Object.assign(settings, {
       ...defaultRelightingSettings,
       lightPosition: [...defaultRelightingSettings.lightPosition] as [number, number],
       lightColor: [...defaultRelightingSettings.lightColor] as [number, number, number],
     });
-    renderer?.update(settings);
     setLightActive(false);
+    syncRenderer();
     updateBulb();
   });
 }
 
-async function setupHand() {
+async function setupHand(): Promise<void> {
   const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm');
   hand = await HandLandmarker.createFromOptions(vision, {
     baseOptions: {
@@ -123,53 +146,77 @@ async function setupHand() {
   });
 }
 
-function updatePalm(now: number) {
+function updatePalm(now: number): void {
   if (!hand || !lightActive) {
     handVisible = false;
-    handIndicator.style.display = 'none';
     return;
   }
+
   const result: HandLandmarkerResult = hand.detectForVideo(video, now);
   const lm = result.landmarks[0];
   if (!lm) {
     handVisible = false;
-    handIndicator.style.display = 'none';
     return;
   }
-  let x = 0, y = 0;
-  for (const i of [0, 5, 9, 13, 17]) { x += lm[i].x; y += lm[i].y; }
-  x /= 5; y /= 5;
+
+  let x = 0;
+  let y = 0;
+  for (const i of [0, 5, 9, 13, 17]) {
+    x += lm[i].x;
+    y += lm[i].y;
+  }
+  x /= 5;
+  y /= 5;
+
+  // Palm steers the light in image space. Its depth is deliberately offset toward
+  // the viewer so the palm can become an occluder instead of swallowing the light.
   settings.lightPosition = [x, y];
-  renderer?.update({ lightPosition: settings.lightPosition });
+  settings.lightZ = Math.max(0.08, Math.min(1.45, settings.lightZ));
+  renderer?.update({ lightPosition: settings.lightPosition, lightZ: settings.lightZ });
+
   handVisible = true;
-  handIndicator.style.display = 'block';
   handIndicator.style.left = `${x * canvas.clientWidth}px`;
   handIndicator.style.top = `${y * canvas.clientHeight}px`;
 }
 
-async function loadDepthModel() {
+async function loadDepthModel(): Promise<void> {
   if (!root) throw new Error('TypeGPU root is not initialized');
+
   const hasF16 = root.device.features.has('shader-f16');
   const variant = modelVariant(RECOMMENDED_MODEL, hasF16);
   if (!variant) throw new Error('No compatible DepthART model variant available.');
-  setStatus(`Downloading TypeGPU DepthART ${RECOMMENDED_MODEL} model (${variant.megabytes} MB)…`);
+
+  setStatus(`Loading TypeGPU DepthART 448×448 (${variant.megabytes} MB)…`);
   const bundle = parseDepthBundle(await fetchModel(variant, new AbortController().signal));
   plan = new DepthInferencePlan(root, bundle);
   await plan.initAsync();
+
   renderer = new DepthRelightingRenderer(root, canvas);
   await renderer.initAsync();
   renderer.attach(plan);
-  renderer.update(settings);
-  setStatus('GPU depth model ready · activate the virtual bulb');
+  syncRenderer();
 }
 
-function frame(now: number) {
+function frame(now: number): void {
   if (!running || !renderer) return;
+
   const t0 = performance.now();
   updatePalm(now);
-  if (lightActive && !handVisible) lightInput.orbitTick();
-  renderer.update({ lightPosition: settings.lightPosition, lightZ: settings.lightZ });
-  renderer.render({ source: video, uvTransform: d.mat2x2f.identity(), swapAxes: false });
+
+  // Same behavior as the official TypeGPU example: light input changes renderer
+  // state, then renderer.render() performs inference + depth processing + surface
+  // reconstruction + relighting in one command encoder.
+  if (lightActive && !handVisible) {
+    lightInput.orbitTick();
+  }
+
+  syncRenderer();
+  renderer.render({
+    source: video,
+    uvTransform: d.mat2x2f.identity(),
+    swapAxes: false,
+  });
+
   updateBulb();
   frames++;
   if (now - last > 500) {
@@ -181,32 +228,54 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 
-const lightInput = setupLightInput(canvas, update => {
-  if (update.lightPosition) {
-    settings.lightPosition = [...update.lightPosition] as [number, number];
-    renderer?.update({ lightPosition: settings.lightPosition });
-  }
-  if (update.lightZ !== undefined) {
-    settings.lightZ = update.lightZ;
-    renderer?.update({ lightZ: settings.lightZ });
-  }
-}, new AbortController().signal);
+const lightInput = setupLightInput(
+  canvas,
+  (update) => {
+    if (update.lightPosition) {
+      settings.lightPosition = [...update.lightPosition] as [number, number];
+    }
+    if (update.lightZ !== undefined) {
+      settings.lightZ = update.lightZ;
+    }
+    syncRenderer();
+  },
+  new AbortController().signal,
+);
 
 start.addEventListener('click', async () => {
   if (running) return;
+
   try {
     start.disabled = true;
     setStatus('Requesting camera…');
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60, max: 60 }, facingMode: 'user' },
+      audio: false,
+    });
     video.srcObject = stream;
     await video.play();
     inputSize && (inputSize.textContent = `${video.videoWidth}×${video.videoHeight}`);
+
     root = await tgpu.init({ device: { optionalFeatures: ['shader-f16'] } });
     await loadDepthModel();
+
+    // Use the same requestVideoFrameCallback cadence as the official TypeGPU
+    // example, so every render consumes a fresh camera frame.
     running = true;
     setLightActive(false);
-    requestAnimationFrame(frame);
-    void setupHand().catch(() => setStatus('Depth model ready · palm control unavailable, mouse control remains active'));
+    setStatus('DepthART GPU ready · activate the virtual bulb');
+
+    if (video.requestVideoFrameCallback) {
+      const tick = (time: number) => {
+        frame(time);
+        if (running) video.requestVideoFrameCallback(tick);
+      };
+      video.requestVideoFrameCallback(tick);
+    } else {
+      requestAnimationFrame(frame);
+    }
+
+    void setupHand().catch(() => setStatus('DepthART ready · palm control unavailable; mouse/orbit control remains active'));
   } catch (error) {
     start.disabled = false;
     setStatus(`Startup failed: ${(error as Error).message}`);
