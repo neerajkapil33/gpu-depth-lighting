@@ -20,17 +20,19 @@ const sourceCtx=sourceCanvas.getContext('2d',{willReadFrequently:true})!;
 
 export async function loadDepthModel(onProgress?:(message:string)=>void){
   if(estimator)return;
-  onProgress?.('Loading Depth Anything V2 Small · WebGPU q4f16…');
-  estimator=await pipeline('depth-estimation',MODEL,{
-    device:'webgpu',
-    dtype:'q4f16',
-    progress_callback:(p:any)=>{
+  onProgress?.('Loading Depth Anything V2 Small · WebGPU…');
+  try{
+    estimator=await pipeline('depth-estimation',MODEL,{device:'webgpu',dtype:'q4f16',progress_callback:(p:any)=>{
       if(p?.status==='progress'||p?.status==='progress_total'){
         const pct=typeof p.progress==='number'?` ${Math.round(p.progress)}%`:'';
         onProgress?.(`Loading Depth Anything V2 Small · WebGPU${pct}`);
       }
-    }
-  });
+    }});
+  }catch(firstError){
+    console.warn('Depth Anything q4f16 failed; retrying with fp16',firstError);
+    onProgress?.('Depth model precision fallback · WebGPU fp16…');
+    estimator=await pipeline('depth-estimation',MODEL,{device:'webgpu',dtype:'fp16'});
+  }
   onProgress?.('Depth Anything V2 ready · dense monocular depth · WebGPU.');
 }
 
@@ -38,10 +40,11 @@ export function isDepthReady(){return estimator!==null;}
 export function getSceneLuma(){return lastLuma;}
 
 export function getDepthAt(nx:number,ny:number){
-  if(!lastDepth||!lastW||!lastH)return .65;
+  if(!lastDepth||!lastW||!lastH)return .55;
   const x=Math.max(0,Math.min(lastW-1,Math.floor(nx*lastW)));
   const y=Math.max(0,Math.min(lastH-1,Math.floor(ny*lastH)));
-  return lastDepth[y*lastW+x];
+  const v=lastDepth[y*lastW+x];
+  return Number.isFinite(v)?v:.55;
 }
 
 export async function estimateVideoDepth(video:HTMLVideoElement,W:number,H:number):Promise<Float32Array|null>{
@@ -75,11 +78,9 @@ export async function estimateVideoDepth(video:HTMLVideoElement,W:number,H:numbe
       for(let x=0;x<W;x++){
         const xx=Math.min(depth.width-1,Math.floor(x*sx));
         const raw=(Number(src[yy*depth.width+xx])-min)/range;
-        // Depth Anything relative-depth convention: higher predicted depth is nearer.
         const cameraZ=DEPTH_NEAR+(1-Math.max(0,Math.min(1,raw)))*(DEPTH_FAR-DEPTH_NEAR);
         const i=y*W+x;
-        // Strong enough temporal filtering to stop shadow swimming, while still following a moving head.
-        out[i]=lastDepth?lastDepth[i]*.72+cameraZ*.28:cameraZ;
+        out[i]=lastDepth?lastDepth[i]*.62+cameraZ*.38:cameraZ;
       }
     }
     lastDepth=out;
