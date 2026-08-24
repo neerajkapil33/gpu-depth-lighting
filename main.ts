@@ -1,6 +1,7 @@
 import './style.css';
 import { compositeShader, inferenceShader, normalShader } from './shaders';
 import { FilesetResolver, HandLandmarker, type HandLandmarkerResult } from '@mediapipe/tasks-vision';
+import { Frame, initTypeGPU } from './typegpu-bridge';
 
 const OUTPUT_WIDTH = 960;
 const OUTPUT_HEIGHT = 540;
@@ -23,6 +24,8 @@ let resources: Resources;
 let inferencePipeline: GPUComputePipeline;
 let normalPipeline: GPUComputePipeline;
 let compositePipeline: GPURenderPipeline;
+let tgpuRoot: ReturnType<typeof initTypeGPU>;
+let frameUniform: ReturnType<ReturnType<typeof initTypeGPU>['createUniform']>;
 let lastSample = performance.now();
 let frames = 0;
 let checkFirstFrame = true;
@@ -68,7 +71,7 @@ let heldHandIndex = 0;
 let freeVelX = 0;
 let freeVelY = 0;
 
-const THROW_SPEED_THRESHOLD = 0.028; // per-frame palm displacement that counts as a "flick"
+const THROW_SPEED_THRESHOLD = 0.028;
 const THROW_MULTIPLIER = 3.2;
 const GRAVITY = 0.0011;
 const DAMPING = 0.994;
@@ -106,7 +109,6 @@ function updateLightPhysics(): void {
         freeVelY = palmVelocity[heldHandIndex].y * THROW_MULTIPLIER;
       }
     } else {
-      // Lost track of the holding hand: drop the light where it was.
       lightState = 'free';
       freeVelX = 0;
       freeVelY = 0;
@@ -143,9 +145,9 @@ function updateLightPhysics(): void {
   }
 }
 
-function makeTexture(format: GPUTextureFormat): GPUTexture {
+function makeTexture(textureFormat: GPUTextureFormat): GPUTexture {
   return device.createTexture({
-    size: [OUTPUT_WIDTH, OUTPUT_HEIGHT], format,
+    size: [OUTPUT_WIDTH, OUTPUT_HEIGHT], format: textureFormat,
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
   });
 }
@@ -155,6 +157,12 @@ async function initialize(): Promise<void> {
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) throw new Error('No compatible GPU adapter was found.');
   device = await adapter.requestDevice();
+
+  // Incremental TypeGPU adoption: wrap the exact GPUDevice already owned by
+  // this renderer. TypeGPU does not request or create a second device.
+  tgpuRoot = initTypeGPU(device);
+  frameUniform = tgpuRoot.createUniform(Frame);
+
   device.lost.then((info) => { status.textContent = `GPU device lost: ${info.message}`; });
   device.addEventListener('uncapturederror', (event) => {
     status.textContent = `WebGPU error: ${event.error.message}`;
@@ -167,7 +175,9 @@ async function initialize(): Promise<void> {
   resources = {
     depth: makeTexture('r32float'),
     normal: makeTexture('rgba16float'),
-    uniform: device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
+    // The existing bind groups continue to receive the underlying GPUBuffer.
+    // TypeGPU owns the typed schema and CPU-side writes for incremental adoption.
+    uniform: frameUniform.buffer,
     videoSampler: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }),
   };
   inferencePipeline = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: inferenceShader }), entryPoint: 'mockDepth' } });
@@ -187,12 +197,18 @@ function frame(time: number): void {
   const started = performance.now();
   detectHands(started);
   updateLightPhysics();
+
+  // TypeGPU performs the schema-aware write while the existing WGSL shaders
+  // continue consuming the same raw uniform buffer at the same bindings.
+  frameUniform.write({
+    outputSize: d.vec2u(OUTPUT_WIDTH, OUTPUT_HEIGHT),
+    time,
+    _pad: 0,
+    light: d.vec4f(lightX, lightY, 0, 0),
+  });
+
   const external = device.importExternalTexture({ source: video });
-  device.queue.writeBuffer(resources.uniform, 0, new Uint32Array([OUTPUT_WIDTH, OUTPUT_HEIGHT]));
-  device.queue.writeBuffer(resources.uniform, 8, new Float32Array([time, 0]));
-  device.queue.writeBuffer(resources.uniform, 16, new Float32Array([lightX, lightY, 0, 0]));
   if (checkFirstFrame) device.pushErrorScope('validation');
-  // All pass dependencies are encoded into exactly one command buffer and submitted once.
   const encoder = device.createCommandEncoder({ label: 'depth-lighting-frame' });
   {
     const pass = encoder.beginComputePass({ label: 'inference (mock)' });
