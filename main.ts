@@ -34,7 +34,6 @@ const settings = {
 };
 
 function setStatus(text: string) { status.textContent = text; }
-
 function el<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
 
 function setLightActive(on: boolean) {
@@ -56,7 +55,7 @@ function updateBulb() {
   bulb.style.top = `${y}px`;
   bulb.style.opacity = handVisible ? '0' : '1';
   bulb.style.transform = 'translate(-50%, -50%)';
-  const [r, g, b] = settings.lightColor.map(v => Math.round(v * 255));
+  const [r, g, b] = settings.lightColor.map((v: number) => Math.round(v * 255));
   bulb.style.filter = `drop-shadow(0 0 12px rgb(${r},${g},${b})) drop-shadow(0 0 32px rgb(${r},${g},${b}))`;
 }
 
@@ -168,9 +167,7 @@ function frame(now: number) {
   if (!running || !renderer) return;
   const t0 = performance.now();
   updatePalm(now);
-  if (lightActive && !handVisible) {
-    lightInput.orbitTick();
-  }
+  if (lightActive && !handVisible) lightInput.orbitTick();
   renderer.update({ lightPosition: settings.lightPosition, lightZ: settings.lightZ });
   renderer.render({ source: video, uvTransform: d.mat2x2f.identity(), swapAxes: false });
   updateBulb();
