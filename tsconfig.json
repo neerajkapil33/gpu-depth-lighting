@@ -12,5 +12,5 @@
     "strict": true,
     "types": ["@webgpu/types"]
   },
-  "include": ["src"]
+  "include": ["*.ts"]
 }
