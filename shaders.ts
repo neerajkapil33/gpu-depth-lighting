@@ -1,93 +1,57 @@
-export const inferenceShader = /* wgsl */ `
-struct Frame { width: u32, height: u32, time: f32, _pad: f32 }
-@group(0) @binding(0) var camera: texture_external;
-@group(0) @binding(1) var videoSampler: sampler;
-// r32float is a portable writable WebGPU storage-texture format.
-@group(0) @binding(2) var depthOut: texture_storage_2d<r32float, write>;
-@group(0) @binding(3) var<uniform> frame: Frame;
-
-// REPLACE THIS ENTRY POINT with the compiled/generative inference graph for
-// DepthAnything (preprocess → encoder → decoder → depth). Its output contract
-// is a normalized linear depth value in depthOut, and it must remain GPU-only.
-@compute @workgroup_size(8, 8)
-fn mockDepth(@builtin(global_invocation_id) id: vec3u) {
-  if (id.x >= frame.width || id.y >= frame.height) { return; }
-  let uv = (vec2f(id.xy) + 0.5) / vec2f(f32(frame.width), f32(frame.height));
-  let rgb = textureSampleBaseClampToEdge(camera, videoSampler, uv).rgb;
-  let luminance = dot(rgb, vec3f(0.2126, 0.7152, 0.0722));
-  // This is intentionally NOT ML inference: a stable pseudo-depth proxy.
-  let center = 1.0 - length(uv - vec2f(0.5)) * 1.15;
-  let depth = clamp(0.22 + luminance * 0.38 + center * 0.4, 0.0, 1.0);
-  textureStore(depthOut, vec2i(id.xy), vec4f(depth, 0.0, 0.0, 1.0));
-}`;
-
 export const normalShader = /* wgsl */ `
-struct Frame { width: u32, height: u32, time: f32, _pad: f32 }
-@group(0) @binding(0) var depthIn: texture_2d<f32>;
-@group(0) @binding(1) var normalsOut: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(2) var<uniform> frame: Frame;
-fn readDepth(p: vec2i) -> f32 {
-  let maxP = vec2i(i32(frame.width) - 1, i32(frame.height) - 1);
-  return textureLoad(depthIn, clamp(p, vec2i(0), maxP), 0).x;
+struct Frame { width:u32, height:u32, time:f32, sceneLuma:f32, lightX:f32, lightY:f32, lightZ:f32, lightIntensity:f32 }
+@group(0) @binding(0) var depthIn:texture_2d<f32>;
+@group(0) @binding(1) var normalsOut:texture_storage_2d<rgba16float,write>;
+@group(0) @binding(2) var<uniform> frame:Frame;
+fn z(p:vec2i)->f32{let m=vec2i(i32(frame.width)-1,i32(frame.height)-1);return textureLoad(depthIn,clamp(p,vec2i(0),m),0).x;}
+@compute @workgroup_size(8,8)
+fn reconstructNormals(@builtin(global_invocation_id) id:vec3u){if(id.x>=frame.width||id.y>=frame.height){return;}let p=vec2i(id.xy);let dx=z(p+vec2i(2,0))-z(p-vec2i(2,0));let dy=z(p+vec2i(0,2))-z(p-vec2i(0,2));let n=normalize(vec3f(-dx*1.25,-dy*1.25,0.72));textureStore(normalsOut,p,vec4f(n*0.5+0.5,1));}
+`;
+
+export const shadowShader = /* wgsl */ `
+struct Frame { width:u32, height:u32, time:f32, sceneLuma:f32, lightX:f32, lightY:f32, lightZ:f32, lightIntensity:f32 }
+@group(0) @binding(0) var depth:texture_2d<f32>;
+@group(0) @binding(1) var shadowOut:texture_storage_2d<r16float,write>;
+@group(0) @binding(2) var<uniform> frame:Frame;
+fn z(p:vec2i)->f32{let m=vec2i(i32(frame.width)-1,i32(frame.height)-1);return textureLoad(depth,clamp(p,vec2i(0),m),0).x;}
+@compute @workgroup_size(8,8)
+fn projectShadow(@builtin(global_invocation_id) id:vec3u){
+ if(id.x>=frame.width||id.y>=frame.height){return;}
+ let uv=(vec2f(id.xy)+0.5)/vec2f(f32(frame.width),f32(frame.height));
+ let here=z(vec2i(id.xy)); let toLight=vec2f(frame.lightX,frame.lightY)-uv; var blocked=0.0;
+ // Multi-tap screen-space ray test. Real dense depth makes the silhouette track
+ // head/body geometry; the soft threshold prevents crawling hard edges.
+ for(var i:i32=1;i<=12;i++){let t=f32(i)/13.0;let q=vec2i((uv+toLight*t)*vec2f(f32(frame.width),f32(frame.height)));let sampleZ=z(q);blocked=max(blocked,smoothstep(0.008,0.055,here-sampleZ));}
+ let softness=smoothstep(0.02,0.30,length(toLight));
+ textureStore(shadowOut,vec2i(id.xy),vec4f(blocked*(1.0-softness*0.45),0,0,1));
 }
-@compute @workgroup_size(8, 8)
-fn reconstructNormals(@builtin(global_invocation_id) id: vec3u) {
-  if (id.x >= frame.width || id.y >= frame.height) { return; }
-  let p = vec2i(id.xy);
-  // Sample across a wider span so fine camera noise does not turn into harsh relief.
-  let dx = readDepth(p + vec2i(2, 0)) - readDepth(p - vec2i(2, 0));
-  let dy = readDepth(p + vec2i(0, 2)) - readDepth(p - vec2i(0, 2));
-  let n = normalize(vec3f(-dx * 0.65, -dy * 0.65, 0.70));
-  textureStore(normalsOut, p, vec4f(n * 0.5 + 0.5, 1.0));
-}`;
+`;
 
 export const compositeShader = /* wgsl */ `
-struct Frame { width: u32, height: u32, time: f32, _pad0: f32, lightX: f32, lightY: f32, _pad1: f32, _pad2: f32 }
-@group(0) @binding(0) var camera: texture_external;
-@group(0) @binding(1) var videoSampler: sampler;
-@group(0) @binding(2) var depth: texture_2d<f32>;
-@group(0) @binding(3) var normals: texture_2d<f32>;
-@group(0) @binding(4) var<uniform> frame: Frame;
-
-struct VSOut { @builtin(position) position: vec4f, @location(0) uv: vec2f }
-@vertex fn fullscreen(@builtin(vertex_index) i: u32) -> VSOut {
-  var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
-  var out: VSOut;
-  out.position = vec4f(p[i], 0.0, 1.0);
-  out.uv = vec2f(p[i].x * 0.5 + 0.5, 1.0 - (p[i].y * 0.5 + 0.5));
-  return out;
+struct Frame { width:u32, height:u32, time:f32, sceneLuma:f32, lightX:f32, lightY:f32, lightZ:f32, lightIntensity:f32 }
+@group(0) @binding(0) var camera:texture_external;
+@group(0) @binding(1) var videoSampler:sampler;
+@group(0) @binding(2) var depth:texture_2d<f32>;
+@group(0) @binding(3) var normals:texture_2d<f32>;
+@group(0) @binding(4) var shadow:texture_2d<f32>;
+@group(0) @binding(5) var<uniform> frame:Frame;
+struct VSOut{@builtin(position)position:vec4f;@location(0)uv:vec2f}
+@vertex fn fullscreen(@builtin(vertex_index)i:u32)->VSOut{var p=array<vec2f,3>(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3));var o:VSOut;o.position=vec4f(p[i],0,1);o.uv=vec2f(p[i].x*.5+.5,1-(p[i].y*.5+.5));return o;}
+@fragment fn composite(in:VSOut)->@location(0)vec4f{
+ let src=textureSampleBaseClampToEdge(camera,videoSampler,in.uv).rgb;
+ let p=vec2i(clamp(in.uv*vec2f(f32(frame.width),f32(frame.height)),vec2f(0),vec2f(f32(frame.width-1u),f32(frame.height-1u))));
+ let z=textureLoad(depth,p,0).x;let n=normalize(textureLoad(normals,p,0).xyz*2-1);let sh=textureLoad(shadow,p,0).x;
+ let aspect=f32(frame.width)/f32(frame.height);let toLight=vec2f((frame.lightX-in.uv.x)*aspect,frame.lightY-in.uv.y);let dist=length(toLight);
+ let lightDir=normalize(vec3f(toLight.x,-toLight.y,max(0.12,frame.lightZ)));let diffuse=max(dot(n,lightDir),0);
+ let falloff=1.0/max(0.12,dist*dist+frame.lightZ*frame.lightZ);
+ let darkness=1.0-clamp(frame.sceneLuma,0,1);let adaptive=1.0+darkness*darkness*2.8;
+ // Foreground depth receives stronger local illumination while the projected
+ // shadow suppresses wall/background light behind the occluder.
+ let nearBoost=1.0+smoothstep(0.82,0.12,z)*0.55;
+ let boost=diffuse*falloff*frame.lightIntensity*adaptive*0.075*nearBoost*(1.0-sh*0.90);
+ let orb=smoothstep(0.075,0.0,dist)*1.9;
+ let warm=vec3f(1.0,0.88,0.67);
+ let shaded=src*(0.58+boost)+warm*orb;
+ return vec4f(clamp(shaded,vec3f(0),vec3f(1)),1);
 }
-@fragment fn composite(in: VSOut) -> @location(0) vec4f {
-  let src = textureSampleBaseClampToEdge(camera, videoSampler, in.uv).rgb;
-  let p = vec2i(clamp(
-    in.uv * vec2f(f32(frame.width), f32(frame.height)),
-    vec2f(0.0),
-    vec2f(f32(frame.width - 1u), f32(frame.height - 1u))
-  ));
-  let z = textureLoad(depth, p, 0).x;
-  let n = normalize(textureLoad(normals, p, 0).xyz * 2.0 - 1.0);
-  let aspect = f32(frame.width) / f32(frame.height);
-  // Screen-space vector from this pixel to the virtual light.
-  let toLight2D = vec2f((frame.lightX - in.uv.x) * aspect, frame.lightY - in.uv.y);
-  let dist = length(toLight2D);
-  let lightDir = normalize(vec3f(toLight2D.x, -toLight2D.y, 0.28));
-  let diffuse = max(dot(n, lightDir), 0.0);
-  let falloff = clamp(1.0 - dist * 1.35, 0.0, 1.0);
-  let neighbor = textureLoad(depth, min(p + vec2i(3, 3), vec2i(i32(frame.width - 1u), i32(frame.height - 1u))), 0).x;
-  let occlusion = 1.0 - smoothstep(0.015, 0.15, abs(neighbor - z));
-  // Sample depth right at the light's own screen position: whatever is closest
-  // to the camera there (e.g. a raised hand) is treated as physically blocking
-  // the light, so it darkens instead of lighting up.
-  let lightPixel = vec2i(clamp(
-    vec2f(frame.lightX, frame.lightY) * vec2f(f32(frame.width), f32(frame.height)),
-    vec2f(0.0),
-    vec2f(f32(frame.width - 1u), f32(frame.height - 1u))
-  ));
-  let depthAtLight = textureLoad(depth, lightPixel, 0).x;
-  let blocked = smoothstep(0.05, 0.16, depthAtLight - 0.5);
-  let orb = smoothstep(0.05, 0.0, dist) * 1.6 * (1.0 - blocked);
-  let boost = diffuse * falloff * falloff * 1.6 * (1.0 - blocked);
-  let illumination = 0.62 + boost;
-  let shaded = src * illumination * mix(0.7, 1.0, occlusion) + vec3f(1.0, 0.92, 0.75) * orb;
-  return vec4f(clamp(shaded, vec3f(0.0), vec3f(1.0)), 1.0);
-}`;
+`;
