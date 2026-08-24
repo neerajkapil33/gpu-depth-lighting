@@ -24,13 +24,31 @@ async function walk(path = '') {
   return files;
 }
 
+function patchDepthOcclusion(source, rel) {
+  if (rel !== 'shaders.ts') return source;
+
+  // TypeGPU's reference shader keeps the virtual bulb in a positive camera-Z
+  // space while the monocular surface is represented in [-0.7, 0]. That makes
+  // the reference bulb test always report the bulb as in front of the surface.
+  // Map the user-controlled lightZ into the same surface-Z space for the bulb
+  // visibility test only. Lighting/shadows keep the original light coordinates.
+  const old = `const front = relightLayout.$.params.lightZ + BULB_WORLD_RADIUS * dome;\n  const solid = std.smoothstep(d.f32(0), BULB_OCCLUSION_SOFTNESS, front - surfaceZ(depth));`;
+  const replacement = `const bulbSceneZ = std.mix(\n    d.f32(SURFACE_FAR_Z + 0.02),\n    d.f32(NEAR_Z - 0.005),\n    std.saturate((relightLayout.$.params.lightZ - d.f32(0.10)) / d.f32(1.15)),\n  );\n  const front = bulbSceneZ + BULB_WORLD_RADIUS * dome;\n  const solid = std.smoothstep(d.f32(0), BULB_OCCLUSION_SOFTNESS, front - surfaceZ(depth));`;
+
+  if (!source.includes(old)) {
+    throw new Error('Depth-occlusion patch target not found in TypeGPU shaders.ts');
+  }
+  return source.replace(old, replacement);
+}
+
 const files = await walk();
 for (const rel of files) {
   const r = await fetch(`${RAW_ROOT}/${rel}`, { headers: { 'User-Agent': 'gpu-depth-lighting-build' } });
   if (!r.ok) throw new Error(`TypeGPU source download failed for ${rel}: ${r.status}`);
   const dest = join(DEST, rel);
   await mkdir(dirname(dest), { recursive: true });
-  const source = await r.text();
+  let source = await r.text();
+  source = patchDepthOcclusion(source, rel);
   // TypeGPU's GPU DSL relies on operator overloads that strict tsc cannot
   // validate reliably across generated WGSL vector types. Vite still transpiles
   // this executable vendor source; the application's own code remains strict.
