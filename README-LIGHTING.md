@@ -1,27 +1,30 @@
-# Virtual Orbit Light — Critical/High Priority Pipeline
+# Virtual Orbit Light — Physical Room Lighting Pipeline
 
-Implemented modules:
+Implemented critical/high-priority pipeline:
 
-- Incremental TypeGPU adoption through `tgpu.initFromDevice({ device })`.
-- Typed scene resource contract for depth, normals and shadow textures.
-- GPU face-landmark tracking for face-aware illumination.
-- 3D light-position estimation from screen coordinates + depth.
-- Physical inverse-square-style falloff and warm light model.
-- Adaptive low-light gain.
-- Projected soft-shadow compute stage for head/body occlusion.
-- Temporal-stability helpers are designed to sit between scene analysis and compositing.
+- WebGPU renderer with TypeGPU owning the typed uniform contract.
+- Depth Anything V2 Small running in-browser through Transformers.js WebGPU inference.
+- Dense monocular relative-depth map, temporally stabilized before GPU upload.
+- GPU depth-to-normal reconstruction for surface-aware illumination.
+- 3D point-light placement from screen coordinates plus local depth.
+- Inverse-square-style point-light falloff with adaptive low-light gain.
+- GPU screen-space 3D shadow marching using the depth field for head/body occlusion.
+- Face and hand landmarks for face-aware illumination and physical bulb interaction.
+- Sharp emissive bulb core without an artificial radial glow.
+- Temporal depth filtering to reduce shadow swimming.
 
-## Important limitation
-The repository's current depth stage is still a deterministic GPU depth proxy. It is not a true monocular depth neural network. The shadow stage therefore provides an approximation until a real depth model is integrated.
+## Physical-room behavior
 
-The architecture deliberately keeps the WebGPU device/pipelines interoperable so a real Depth Anything / WebGPU inference graph can replace the proxy without changing the face, lighting, TypeGPU or compositor contracts.
+The browser camera remains the observed RGB image. The virtual bulb adds physically motivated illumination to visible surfaces using the monocular depth field. When a foreground head/body lies between the virtual bulb and a deeper wall, the depth ray test suppresses the wall illumination and produces the moving head/body shadow.
+
+This is a monocular-depth approximation rather than a metric reconstruction of the room. A single RGB webcam cannot recover exact physical distances, hidden geometry, or true light transport. The result is nevertheless driven by a real dense neural depth model rather than a deterministic depth proxy.
 
 ## Local validation
 
 ```bash
-pnpm install
-pnpm build
-pnpm dev
+npm install
+npm run build
+npm run dev
 ```
 
-For a production-quality room-lighting result, the next required model swap is a real dense depth model. A normal RGB webcam cannot provide physically exact wall geometry or shadows; the implementation uses screen-space/depth approximation until that model is available.
+For the strongest effect, use a dim room with a reasonably plain wall behind the subject. Place the virtual bulb to one side or above the face; the wall should brighten around the bulb and the head shadow should move in the opposite direction.
