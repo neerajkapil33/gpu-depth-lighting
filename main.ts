@@ -11,12 +11,10 @@ const canvas = document.querySelector<HTMLCanvasElement>('#output')!;
 const video = document.querySelector<HTMLVideoElement>('#video')!;
 const start = document.querySelector<HTMLButtonElement>('#start')!;
 const status = document.querySelector<HTMLElement>('#status')!;
-const bulb = document.querySelector<HTMLElement>('#bulb')!;
 const handIndicator = document.querySelector<HTMLElement>('#hand-indicator')!;
 const cpuMs = document.querySelector<HTMLElement>('#cpu-ms');
 const fpsEl = document.querySelector<HTMLElement>('#fps');
 const inputSize = document.querySelector<HTMLElement>('#input-size');
-
 let root: Awaited<ReturnType<typeof tgpu.init>> | undefined;
 let renderer: DepthRelightingRenderer | undefined;
 let plan: DepthInferencePlan | undefined;
@@ -26,209 +24,30 @@ let lightActive = false;
 let handVisible = false;
 let last = performance.now();
 let frames = 0;
-
-const settings = {
-  ...defaultRelightingSettings,
-  lightPosition: [...defaultRelightingSettings.lightPosition] as [number, number],
-  lightColor: [...defaultRelightingSettings.lightColor] as [number, number, number],
-};
-
+const settings = { ...defaultRelightingSettings, lightPosition: [...defaultRelightingSettings.lightPosition] as [number, number], lightColor: [...defaultRelightingSettings.lightColor] as [number, number, number] };
 function setStatus(text: string) { status.textContent = text; }
 function el<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
-
-function syncRenderer() {
-  renderer?.update({
-    lightPosition: settings.lightPosition,
-    lightZ: settings.lightZ,
-    intensity: lightActive ? settings.intensity : 0,
-    exposure: settings.exposure,
-    relief: settings.relief,
-    shadow: settings.shadow,
-    occlusion: settings.occlusion,
-    lightColor: settings.lightColor,
-    mirror: settings.mirror,
-    mode: settings.mode,
-  });
-}
-
-function setLightActive(on: boolean) {
-  lightActive = on;
-  syncRenderer();
-  const button = document.getElementById('light-toggle') as HTMLButtonElement | null;
-  if (button) {
-    button.textContent = on ? 'Virtual bulb ON · click to disable' : 'Activate virtual bulb';
-    button.classList.toggle('active', on);
-  }
-  setStatus(on ? '3D GPU point light ACTIVE · depth-aware relighting ON' : 'DepthART ready · activate the virtual bulb');
-  updateBulb();
-}
-
-function updateBulb() {
-  bulb.style.display = lightActive ? 'block' : 'none';
-  bulb.style.left = `${settings.lightPosition[0] * 100}%`;
-  bulb.style.top = `${settings.lightPosition[1] * 100}%`;
-  const depthScale = 0.82 + Math.max(0, Math.min(0.7, settings.lightZ)) * 0.35;
-  bulb.style.transform = `translate(-50%,-50%) scale(${depthScale})`;
-  bulb.setAttribute('aria-label', lightActive ? '3D virtual bulb active' : '3D virtual bulb off');
-  handIndicator.style.display = handVisible ? 'block' : 'none';
-}
-
+function syncRenderer() { renderer?.update({ lightPosition: settings.lightPosition, lightZ: settings.lightZ, intensity: lightActive ? settings.intensity : 0, exposure: settings.exposure, relief: settings.relief, shadow: settings.shadow, occlusion: settings.occlusion, lightColor: settings.lightColor, mirror: settings.mirror, mode: settings.mode }); }
+function setLightActive(on: boolean) { lightActive = on; syncRenderer(); const button = document.getElementById('light-toggle') as HTMLButtonElement | null; if (button) { button.textContent = on ? 'Virtual bulb ON · click to disable' : 'Activate virtual bulb'; button.classList.toggle('active', on); } setStatus(on ? '3D GPU point light ACTIVE · depth-aware relighting ON' : 'DepthART ready · activate the virtual bulb'); updateBulb(); }
+// The legacy HTML/CSS bulb was removed. The bulb is rendered by the TypeGPU relighting pass.
+function updateBulb() { handIndicator.style.display = handVisible ? 'block' : 'none'; }
 function bindControls() {
-  const ranges = [
-    ['ctrl-intensity', 'intensity', 'ctrl-intensity-v'],
-    ['ctrl-ambient', 'exposure', 'ctrl-ambient-v'],
-    ['ctrl-relief', 'relief', 'ctrl-relief-v'],
-    ['ctrl-shadow', 'shadow', 'ctrl-shadow-v'],
-    ['ctrl-occlusion', 'occlusion', 'ctrl-occlusion-v'],
-  ] as const;
-  for (const [id, key, out] of ranges) {
-    const input = document.getElementById(id) as HTMLInputElement | null;
-    const output = document.getElementById(out) as HTMLOutputElement | null;
-    input?.addEventListener('input', () => {
-      const value = Number(input.value);
-      (settings as any)[key] = value;
-      if (output) output.value = value.toFixed(key === 'intensity' ? 1 : 2);
-      syncRenderer();
-    });
-  }
-  const mainIntensity = document.getElementById('intensity') as HTMLInputElement | null;
-  const mainIntensityValue = document.getElementById('intensity-value');
-  mainIntensity?.addEventListener('input', () => {
-    settings.intensity = Number(mainIntensity.value);
-    if (mainIntensityValue) mainIntensityValue.textContent = settings.intensity.toFixed(1);
-    const panel = document.getElementById('ctrl-intensity') as HTMLInputElement | null;
-    const panelValue = document.getElementById('ctrl-intensity-v') as HTMLOutputElement | null;
-    if (panel) panel.value = String(settings.intensity);
-    if (panelValue) panelValue.value = settings.intensity.toFixed(1);
-    syncRenderer();
-  });
+  const ranges = [['ctrl-intensity','intensity','ctrl-intensity-v'],['ctrl-ambient','exposure','ctrl-ambient-v'],['ctrl-relief','relief','ctrl-relief-v'],['ctrl-shadow','shadow','ctrl-shadow-v'],['ctrl-occlusion','occlusion','ctrl-occlusion-v']] as const;
+  for (const [id,key,out] of ranges) { const input = document.getElementById(id) as HTMLInputElement | null; const output = document.getElementById(out) as HTMLOutputElement | null; input?.addEventListener('input', () => { const value = Number(input.value); (settings as any)[key] = value; if (output) output.value = value.toFixed(key === 'intensity' ? 1 : 2); syncRenderer(); }); }
+  const mainIntensity = document.getElementById('intensity') as HTMLInputElement | null; const mainIntensityValue = document.getElementById('intensity-value');
+  mainIntensity?.addEventListener('input', () => { settings.intensity = Number(mainIntensity.value); if (mainIntensityValue) mainIntensityValue.textContent = settings.intensity.toFixed(1); const panel = document.getElementById('ctrl-intensity') as HTMLInputElement | null; const panelValue = document.getElementById('ctrl-intensity-v') as HTMLOutputElement | null; if (panel) panel.value = String(settings.intensity); if (panelValue) panelValue.value = settings.intensity.toFixed(1); syncRenderer(); });
   document.getElementById('light-toggle')?.addEventListener('click', () => setLightActive(!lightActive));
-  bulb.addEventListener('click', () => setLightActive(!lightActive));
   document.getElementById('controls-toggle')?.addEventListener('click', () => el<HTMLElement>('controls-panel').classList.toggle('open'));
-  document.getElementById('ctrl-color')?.addEventListener('input', event => {
-    const hex = (event.target as HTMLInputElement).value;
-    const n = Number.parseInt(hex.slice(1), 16);
-    settings.lightColor = [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-    syncRenderer();
-  });
-  document.getElementById('ctrl-view')?.addEventListener('change', event => {
-    settings.mode = (event.target as HTMLSelectElement).value === 'camera' ? RelightMode.CAMERA : RelightMode.RELIT;
-    syncRenderer();
-  });
-  document.getElementById('ctrl-camera')?.addEventListener('change', event => {
-    settings.mirror = (event.target as HTMLSelectElement).value === 'front';
-    syncRenderer();
-  });
-  document.getElementById('ctrl-source')?.addEventListener('change', event => {
-    settings.mode = (event.target as HTMLSelectElement).value === 'camera' ? RelightMode.CAMERA : RelightMode.RELIT;
-    syncRenderer();
-  });
-  document.getElementById('ctrl-reset')?.addEventListener('click', () => {
-    Object.assign(settings, {
-      ...defaultRelightingSettings,
-      lightPosition: [...defaultRelightingSettings.lightPosition] as [number, number],
-      lightColor: [...defaultRelightingSettings.lightColor] as [number, number, number],
-    });
-    setLightActive(true);
-    syncRenderer();
-  });
+  document.getElementById('ctrl-color')?.addEventListener('input', event => { const hex = (event.target as HTMLInputElement).value; const n = Number.parseInt(hex.slice(1),16); settings.lightColor = [((n>>16)&255)/255,((n>>8)&255)/255,(n&255)/255]; syncRenderer(); });
+  document.getElementById('ctrl-view')?.addEventListener('change', event => { settings.mode = (event.target as HTMLSelectElement).value === 'camera' ? RelightMode.CAMERA : RelightMode.RELIT; syncRenderer(); });
+  document.getElementById('ctrl-camera')?.addEventListener('change', event => { settings.mirror = (event.target as HTMLSelectElement).value === 'front'; syncRenderer(); });
+  document.getElementById('ctrl-source')?.addEventListener('change', event => { settings.mode = (event.target as HTMLSelectElement).value === 'camera' ? RelightMode.CAMERA : RelightMode.RELIT; syncRenderer(); });
+  document.getElementById('ctrl-reset')?.addEventListener('click', () => { Object.assign(settings,{...defaultRelightingSettings,lightPosition:[...defaultRelightingSettings.lightPosition] as [number,number],lightColor:[...defaultRelightingSettings.lightColor] as [number,number,number]}); setLightActive(true); syncRenderer(); });
 }
-
-async function setupHand() {
-  const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm');
-  hand = await HandLandmarker.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-      delegate: 'GPU',
-    },
-    runningMode: 'VIDEO',
-    numHands: 2,
-  });
-}
-
-function updatePalm(now: number) {
-  if (!hand || !lightActive) { handVisible = false; return; }
-  const result: HandLandmarkerResult = hand.detectForVideo(video, now);
-  const lm = result.landmarks[0];
-  if (!lm) { handVisible = false; return; }
-  let x = 0; let y = 0;
-  for (const i of [0, 5, 9, 13, 17]) { x += lm[i].x; y += lm[i].y; }
-  x /= 5; y /= 5;
-  settings.lightPosition = [x, y];
-  renderer?.update({ lightPosition: settings.lightPosition });
-  handVisible = true;
-  handIndicator.style.left = `${x * canvas.clientWidth}px`;
-  handIndicator.style.top = `${y * canvas.clientHeight}px`;
-}
-
-async function loadDepthModel() {
-  if (!root) throw new Error('TypeGPU root is not initialized');
-  const variant = modelVariant(RECOMMENDED_MODEL, root.device.features.has('shader-f16'));
-  if (!variant) throw new Error('No compatible DepthART model variant available.');
-  setStatus(`Loading TypeGPU DepthART 448×448 (${variant.megabytes} MB)…`);
-  const bundle = parseDepthBundle(await fetchModel(variant, new AbortController().signal));
-  plan = new DepthInferencePlan(root, bundle);
-  await plan.initAsync();
-  renderer = new DepthRelightingRenderer(root, canvas);
-  await renderer.initAsync();
-  renderer.attach(plan);
-  syncRenderer();
-}
-
-function renderFrame(now: number) {
-  if (!running || !renderer) return;
-  const t0 = performance.now();
-  updatePalm(now);
-  if (lightActive && !handVisible) lightInput.orbitTick();
-  syncRenderer();
-  renderer.render({ source: video, uvTransform: d.mat2x2f.identity(), swapAxes: false });
-  updateBulb();
-  frames++;
-  if (now - last > 500) {
-    fpsEl && (fpsEl.textContent = `${Math.round(frames * 1000 / (now - last))} fps`);
-    frames = 0; last = now;
-  }
-  cpuMs && (cpuMs.textContent = `${(performance.now() - t0).toFixed(1)} ms`);
-}
-
-const lightInput = setupLightInput(canvas, update => {
-  if (update.lightPosition) settings.lightPosition = [...update.lightPosition] as [number, number];
-  if (update.lightZ !== undefined) settings.lightZ = update.lightZ;
-  syncRenderer();
-  updateBulb();
-}, new AbortController().signal);
-
-start.addEventListener('click', async () => {
-  if (running) return;
-  try {
-    start.disabled = true;
-    setStatus('Requesting camera…');
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60, max: 60 }, facingMode: 'user' },
-      audio: false,
-    });
-    video.srcObject = stream;
-    await video.play();
-    inputSize && (inputSize.textContent = `${video.videoWidth}×${video.videoHeight}`);
-    root = await tgpu.init({ device: { optionalFeatures: ['shader-f16'] } });
-    await loadDepthModel();
-    running = true;
-    setLightActive(true);
-    const tick = (time: number) => {
-      renderFrame(time);
-      if (running) {
-        if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(tick);
-        else requestAnimationFrame(tick);
-      }
-    };
-    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(tick);
-    else requestAnimationFrame(tick);
-    void setupHand().catch(() => setStatus('DepthART active · palm control unavailable; mouse/orbit remains active'));
-  } catch (error) {
-    start.disabled = false;
-    setStatus(`Startup failed: ${(error as Error).message}`);
-  }
-});
-
-bindControls();
-setStatus('Ready — start camera.');
+async function setupHand() { const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm'); hand = await HandLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',delegate:'GPU'},runningMode:'VIDEO',numHands:2}); }
+function updatePalm(now:number) { if (!hand || !lightActive) { handVisible=false; return; } const result:HandLandmarkerResult=hand.detectForVideo(video,now); const lm=result.landmarks[0]; if(!lm){handVisible=false;return;} let x=0,y=0; for(const i of [0,5,9,13,17]){x+=lm[i].x;y+=lm[i].y;} x/=5;y/=5; settings.lightPosition=[x,y]; renderer?.update({lightPosition:settings.lightPosition}); handVisible=true; handIndicator.style.left=`${x*canvas.clientWidth}px`; handIndicator.style.top=`${y*canvas.clientHeight}px`; }
+async function loadDepthModel(){ if(!root) throw new Error('TypeGPU root is not initialized'); const variant=modelVariant(RECOMMENDED_MODEL,root.device.features.has('shader-f16')); if(!variant) throw new Error('No compatible DepthART model variant available.'); setStatus(`Loading TypeGPU DepthART 448×448 (${variant.megabytes} MB)…`); const bundle=parseDepthBundle(await fetchModel(variant,new AbortController().signal)); plan=new DepthInferencePlan(root,bundle); await plan.initAsync(); renderer=new DepthRelightingRenderer(root,canvas); await renderer.initAsync(); renderer.attach(plan); syncRenderer(); }
+function renderFrame(now:number){ if(!running||!renderer)return; const t0=performance.now(); updatePalm(now); if(lightActive&&!handVisible) lightInput.orbitTick(); syncRenderer(); renderer.render({source:video,uvTransform:d.mat2x2f.identity(),swapAxes:false}); updateBulb(); frames++; if(now-last>500){fpsEl&&(fpsEl.textContent=`${Math.round(frames*1000/(now-last))} fps`);frames=0;last=now;} cpuMs&&(cpuMs.textContent=`${(performance.now()-t0).toFixed(1)} ms`); }
+const lightInput=setupLightInput(canvas,update=>{if(update.lightPosition)settings.lightPosition=[...update.lightPosition] as [number,number];if(update.lightZ!==undefined)settings.lightZ=update.lightZ;syncRenderer();updateBulb();},new AbortController().signal);
+start.addEventListener('click',async()=>{if(running)return;try{start.disabled=true;setStatus('Requesting camera…');const stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60,max:60},facingMode:'user'},audio:false});video.srcObject=stream;await video.play();inputSize&&(inputSize.textContent=`${video.videoWidth}×${video.videoHeight}`);root=await tgpu.init({device:{optionalFeatures:['shader-f16']}});await loadDepthModel();running=true;setLightActive(true);const tick=(time:number)=>{renderFrame(time);if(running){if(video.requestVideoFrameCallback)video.requestVideoFrameCallback(tick);else requestAnimationFrame(tick);}};if(video.requestVideoFrameCallback)video.requestVideoFrameCallback(tick);else requestAnimationFrame(tick);void setupHand().catch(()=>setStatus('DepthART active · palm control unavailable; mouse/orbit remains active'));}catch(error){start.disabled=false;setStatus(`Startup failed: ${(error as Error).message}`);}});
+bindControls(); setStatus('Ready — start camera.');
