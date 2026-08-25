@@ -3,31 +3,30 @@
   html,
   body {
     width: 100%;
-    min-height: 100%;
-    height: auto;
-    overflow-x: hidden;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
   }
 
   #app {
     width: 100%;
-    min-height: 100dvh;
-    height: auto;
+    height: 100dvh;
+    min-height: 0;
     grid-template-columns: 1fr;
-    grid-template-rows: none;
+    grid-template-rows: minmax(240px, 50dvh) minmax(0, 1fr);
     padding: 7px;
     gap: 7px;
-    overflow: visible;
+    overflow: hidden;
   }
 
   #stage {
     width: 100%;
-    height: 52dvh;
+    height: 100%;
     min-width: 0;
-    min-height: 240px;
-    max-height: 60dvh;
-    flex: 0 0 auto;
+    min-height: 0;
+    max-height: none;
+    flex: none;
+    overflow: hidden;
   }
 
   #output,
@@ -37,30 +36,54 @@
     object-fit: contain;
   }
 
+  /* The video is not part of the mobile scroll surface. */
   #output { touch-action: none; }
 
+  /* Everything below the fixed video is the only area that moves with a finger. */
   .side {
     min-width: 0;
     min-height: 0;
-    height: auto;
-    overflow: visible;
-    padding-bottom: max(16px, env(safe-area-inset-bottom));
+    height: 100%;
+    max-height: none;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    scrollbar-width: auto;
+    scrollbar-color: rgba(255,255,255,.7) rgba(255,255,255,.12);
+    padding: 11px 11px max(18px, env(safe-area-inset-bottom));
   }
 
-  /* Entire area below the video is the native mobile scroll surface. */
+  .side::-webkit-scrollbar {
+    width: 12px;
+  }
+
+  .side::-webkit-scrollbar-track {
+    background: rgba(255,255,255,.10);
+    border-radius: 10px;
+  }
+
+  .side::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,.72);
+    border-radius: 10px;
+    border: 2px solid rgba(0,0,0,.15);
+    min-height: 52px;
+  }
+
+  .side::-webkit-scrollbar-thumb:active {
+    background: rgba(255,255,255,.92);
+  }
+
+  /* Do not create a second nested scroll area: the whole lower panel moves together. */
   .controls {
     flex: none;
     min-height: 0;
     height: auto;
     overflow: visible;
-    -webkit-overflow-scrolling: auto;
-    overscroll-behavior: auto;
-    scrollbar-width: none;
     padding: 10px 4px 12px 0;
     touch-action: auto;
   }
-
-  .controls::-webkit-scrollbar { display: none; }
 
   .actions {
     flex: 0 0 auto;
@@ -75,16 +98,14 @@
   .control-row input { min-height: 32px; }
 }
 
-/* Portrait phones: video is the first viewport segment; everything underneath is naturally swipe-scrollable. */
+/* Portrait: fixed video segment on top; ONLY the panel underneath swipes. */
 @media (max-width: 850px) and (orientation: portrait) {
-  #stage {
-    height: 50dvh;
-    min-height: 240px;
-    max-height: 58dvh;
+  #app {
+    grid-template-rows: minmax(240px, 47dvh) minmax(0, 1fr);
   }
 
   .side {
-    padding: 11px 11px max(16px, env(safe-area-inset-bottom));
+    padding: 11px 11px max(18px, env(safe-area-inset-bottom));
   }
 
   .side h1 { font-size: 16px; }
@@ -99,11 +120,8 @@
   .hint { margin-top: 6px; }
 }
 
-/* Landscape phones: keep the camera on the left and let the complete right-hand panel scroll by finger. */
+/* Landscape: fixed camera on the left; ONLY the right panel swipes. */
 @media (max-width: 850px) and (orientation: landscape) {
-  html,
-  body { overflow-y: hidden; }
-
   #app {
     grid-template-columns: minmax(0, 1fr) 300px;
     grid-template-rows: minmax(0, 1fr);
@@ -114,7 +132,6 @@
 
   #stage {
     height: 100%;
-    max-height: none;
     min-height: 0;
   }
 
@@ -125,8 +142,8 @@
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
-    padding: 10px 10px max(10px, env(safe-area-inset-bottom));
     touch-action: pan-y;
+    padding: 10px 10px max(10px, env(safe-area-inset-bottom));
   }
 
   .controls {
@@ -142,8 +159,4 @@
   .control-row { margin: 7px 0; }
   .actions { padding-top: 8px; }
   .actions button { padding: 8px; min-height: 40px; }
-}
-
-@media (max-width: 430px) and (orientation: portrait) {
-  #stage { height: 47dvh; }
 }
