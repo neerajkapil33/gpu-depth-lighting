@@ -3,27 +3,31 @@
   html,
   body {
     width: 100%;
-    height: 100%;
     min-height: 100%;
-    overflow: hidden;
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   #app {
     width: 100%;
-    height: 100dvh;
-    min-height: 0;
+    min-height: 100dvh;
+    height: auto;
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 42dvh);
+    grid-template-rows: none;
     padding: 7px;
     gap: 7px;
-    overflow: hidden;
+    overflow: visible;
   }
 
   #stage {
     width: 100%;
-    height: 100%;
+    height: 52dvh;
     min-width: 0;
-    min-height: 0;
+    min-height: 240px;
+    max-height: 60dvh;
+    flex: 0 0 auto;
   }
 
   #output,
@@ -38,108 +42,108 @@
   .side {
     min-width: 0;
     min-height: 0;
-    height: 100%;
-    overflow: hidden;
-    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    height: auto;
+    overflow: visible;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
   }
 
+  /* Entire area below the video is the native mobile scroll surface. */
   .controls {
-    flex: 1 1 auto;
+    flex: none;
     min-height: 0;
-    overflow-y: scroll;
-    overflow-x: hidden;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior: contain;
-    scrollbar-width: auto;
-    scrollbar-gutter: stable;
-    padding: 10px 8px 12px 0;
-    touch-action: pan-y;
+    height: auto;
+    overflow: visible;
+    -webkit-overflow-scrolling: auto;
+    overscroll-behavior: auto;
+    scrollbar-width: none;
+    padding: 10px 4px 12px 0;
+    touch-action: auto;
   }
 
-  /* A visible, touch-friendly scrollbar on phones so users can immediately see and drag
-     the remaining controls below Start Camera. */
-  .controls::-webkit-scrollbar {
-    width: 14px;
-  }
-
-  .controls::-webkit-scrollbar-track {
-    background: rgba(127, 127, 127, 0.16);
-    border-radius: 999px;
-  }
-
-  .controls::-webkit-scrollbar-thumb {
-    background: rgba(127, 127, 127, 0.72);
-    border: 3px solid transparent;
-    background-clip: padding-box;
-    border-radius: 999px;
-    min-height: 48px;
-  }
-
-  .controls::-webkit-scrollbar-thumb:active {
-    background: rgba(127, 127, 127, 0.92);
-    background-clip: padding-box;
-  }
+  .controls::-webkit-scrollbar { display: none; }
 
   .actions {
     flex: 0 0 auto;
-    padding-bottom: max(2px, env(safe-area-inset-bottom));
+    padding-bottom: max(4px, env(safe-area-inset-bottom));
   }
 
   .panel-button,
   .actions button {
-    min-height: 44px;
+    min-height: 46px;
   }
 
-  .control-row input { min-height: 30px; }
+  .control-row input { min-height: 32px; }
 }
 
-/* Portrait phones: camera gets the remaining viewport; controls are a scrollable bottom sheet. */
+/* Portrait phones: video is the first viewport segment; everything underneath is naturally swipe-scrollable. */
 @media (max-width: 850px) and (orientation: portrait) {
-  #app { grid-template-rows: minmax(0, 1fr) minmax(285px, 42dvh); }
+  #stage {
+    height: 50dvh;
+    min-height: 240px;
+    max-height: 58dvh;
+  }
 
   .side {
-    max-height: 42dvh;
-    padding: 11px 11px max(11px, env(safe-area-inset-bottom));
+    padding: 11px 11px max(16px, env(safe-area-inset-bottom));
   }
 
   .side h1 { font-size: 16px; }
   .side p { margin-bottom: 6px; }
   .switch { padding: 5px 0; }
-  .controls { padding: 8px 8px 12px 0; margin-bottom: 8px; }
+  .controls { padding: 8px 4px 12px 0; margin-bottom: 8px; }
   .control-row { grid-template-columns: 64px minmax(0, 1fr) 34px; margin: 8px 0; }
   .select-row { gap: 6px; margin-top: 7px; }
   .panel-button { margin-top: 7px; }
   .actions { padding-top: 8px; }
-  .actions button { padding: 9px; }
+  .actions button { padding: 10px; }
   .hint { margin-top: 6px; }
 }
 
-/* Landscape phones: camera stays on the left; controls remain independently scrollable on the right. */
+/* Landscape phones: keep the camera on the left and let the complete right-hand panel scroll by finger. */
 @media (max-width: 850px) and (orientation: landscape) {
+  html,
+  body { overflow-y: hidden; }
+
   #app {
     grid-template-columns: minmax(0, 1fr) 300px;
     grid-template-rows: minmax(0, 1fr);
-    padding: 6px;
-    gap: 8px;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #stage {
+    height: 100%;
+    max-height: none;
+    min-height: 0;
   }
 
   .side {
     height: 100%;
-    padding: 10px;
-    padding-bottom: max(8px, env(safe-area-inset-bottom));
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    padding: 10px 10px max(10px, env(safe-area-inset-bottom));
+    touch-action: pan-y;
   }
 
-  .controls { padding: 8px 8px 12px 0; margin-bottom: 8px; }
+  .controls {
+    overflow: visible;
+    padding: 8px 4px 12px 0;
+    margin-bottom: 8px;
+  }
+
   .stage-title { left: 9px; top: 9px; }
   .side h1 { font-size: 15px; }
   .side p, .hint { font-size: 9px; }
   .switch { padding: 5px 0; }
   .control-row { margin: 7px 0; }
   .actions { padding-top: 8px; }
-  .actions button { padding: 8px; min-height: 38px; }
+  .actions button { padding: 8px; min-height: 40px; }
 }
 
 @media (max-width: 430px) and (orientation: portrait) {
-  #app { grid-template-rows: minmax(0, 1fr) minmax(285px, 44dvh); }
-  .side { max-height: 44dvh; }
+  #stage { height: 47dvh; }
 }
