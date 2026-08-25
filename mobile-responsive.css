@@ -46,11 +46,38 @@
   .controls {
     flex: 1 1 auto;
     min-height: 0;
-    overflow-y: auto;
+    overflow-y: scroll;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
-    padding-top: 10px;
+    scrollbar-width: auto;
+    scrollbar-gutter: stable;
+    padding: 10px 8px 12px 0;
+    touch-action: pan-y;
+  }
+
+  /* A visible, touch-friendly scrollbar on phones so users can immediately see and drag
+     the remaining controls below Start Camera. */
+  .controls::-webkit-scrollbar {
+    width: 14px;
+  }
+
+  .controls::-webkit-scrollbar-track {
+    background: rgba(127, 127, 127, 0.16);
+    border-radius: 999px;
+  }
+
+  .controls::-webkit-scrollbar-thumb {
+    background: rgba(127, 127, 127, 0.72);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: 999px;
+    min-height: 48px;
+  }
+
+  .controls::-webkit-scrollbar-thumb:active {
+    background: rgba(127, 127, 127, 0.92);
+    background-clip: padding-box;
   }
 
   .actions {
@@ -78,7 +105,7 @@
   .side h1 { font-size: 16px; }
   .side p { margin-bottom: 6px; }
   .switch { padding: 5px 0; }
-  .controls { padding: 8px 0; margin-bottom: 8px; }
+  .controls { padding: 8px 8px 12px 0; margin-bottom: 8px; }
   .control-row { grid-template-columns: 64px minmax(0, 1fr) 34px; margin: 8px 0; }
   .select-row { gap: 6px; margin-top: 7px; }
   .panel-button { margin-top: 7px; }
@@ -102,7 +129,7 @@
     padding-bottom: max(8px, env(safe-area-inset-bottom));
   }
 
-  .controls { padding-top: 8px; margin-bottom: 8px; }
+  .controls { padding: 8px 8px 12px 0; margin-bottom: 8px; }
   .stage-title { left: 9px; top: 9px; }
   .side h1 { font-size: 15px; }
   .side p, .hint { font-size: 9px; }
