@@ -1,0 +1,36 @@
+/* Mobile-only presentation layer. Desktop layout/styles remain untouched. */
+@media (max-width: 850px) {
+  #output { touch-action: none; }
+  #app { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) 330px; padding: 7px; }
+  .side { min-height: 0; }
+  .controls { padding-top: 10px; }
+  .actions { padding-bottom: max(2px, env(safe-area-inset-bottom)); }
+  .panel-button, .actions button { min-height: 44px; }
+  .control-row input { min-height: 30px; }
+}
+@media (max-width: 850px) and (orientation: landscape) {
+  #app { grid-template-columns: minmax(0, 1fr) 300px; grid-template-rows: 1fr; padding: 6px; gap: 8px; }
+  .side { padding: 10px; }
+  .controls { padding-top: 8px; margin-bottom: 8px; }
+  .stage-title { left: 9px; top: 9px; }
+  .side h1 { font-size: 15px; }
+  .side p, .hint { font-size: 9px; }
+  .switch { padding: 5px 0; }
+  .control-row { margin: 7px 0; }
+  .actions { padding-top: 8px; }
+  .actions button { padding: 8px; min-height: 38px; }
+}
+@media (max-width: 430px) and (orientation: portrait) {
+  #app { grid-template-rows: minmax(0, 1fr) minmax(285px, 42vh); }
+  .side { padding: 11px; }
+  .side h1 { font-size: 16px; }
+  .side p { margin-bottom: 6px; }
+  .switch { padding: 5px 0; }
+  .controls { padding: 8px 0; margin-bottom: 8px; }
+  .control-row { grid-template-columns: 64px 1fr 34px; margin: 8px 0; }
+  .select-row { gap: 6px; margin-top: 7px; }
+  .panel-button { margin-top: 7px; }
+  .actions { padding-top: 8px; }
+  .actions button { padding: 9px; }
+  .hint { margin-top: 6px; }
+}
