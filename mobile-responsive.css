@@ -5,18 +5,26 @@
     width: 100%;
     height: 100%;
     min-height: 0;
-    overflow: hidden;
+    margin: 0;
+    overflow: hidden !important;
+    overscroll-behavior: none;
+    position: fixed;
+    inset: 0;
   }
 
   #app {
+    position: fixed;
+    inset: 0;
     width: 100%;
     height: 100dvh;
     min-height: 0;
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(240px, 50dvh) minmax(0, 1fr);
+    grid-template-rows: minmax(240px, 47dvh) minmax(0, 1fr);
     padding: 7px;
     gap: 7px;
-    overflow: hidden;
+    overflow: hidden !important;
+    overscroll-behavior: none;
+    box-sizing: border-box;
   }
 
   #stage {
@@ -26,7 +34,9 @@
     min-height: 0;
     max-height: none;
     flex: none;
-    overflow: hidden;
+    overflow: hidden !important;
+    position: relative;
+    touch-action: none;
   }
 
   #output,
@@ -34,55 +44,47 @@
     width: 100%;
     height: 100%;
     object-fit: contain;
+    display: block;
+    touch-action: none;
   }
 
-  /* The video is not part of the mobile scroll surface. */
-  #output { touch-action: none; }
-
-  /* Everything below the fixed video is the only area that moves with a finger. */
+  /* Only this element is allowed to scroll on mobile. */
   .side {
     min-width: 0;
     min-height: 0;
     height: 100%;
     max-height: none;
-    overflow-y: auto;
+    overflow-y: scroll;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
     touch-action: pan-y;
     scrollbar-width: auto;
-    scrollbar-color: rgba(255,255,255,.7) rgba(255,255,255,.12);
+    scrollbar-color: rgba(255,255,255,.75) rgba(255,255,255,.12);
     padding: 11px 11px max(18px, env(safe-area-inset-bottom));
+    box-sizing: border-box;
   }
 
-  .side::-webkit-scrollbar {
-    width: 12px;
-  }
-
+  .side::-webkit-scrollbar { width: 14px; }
   .side::-webkit-scrollbar-track {
     background: rgba(255,255,255,.10);
     border-radius: 10px;
   }
-
   .side::-webkit-scrollbar-thumb {
-    background: rgba(255,255,255,.72);
+    background: rgba(255,255,255,.75);
     border-radius: 10px;
     border: 2px solid rgba(0,0,0,.15);
     min-height: 52px;
   }
+  .side::-webkit-scrollbar-thumb:active { background: rgba(255,255,255,.95); }
 
-  .side::-webkit-scrollbar-thumb:active {
-    background: rgba(255,255,255,.92);
-  }
-
-  /* Do not create a second nested scroll area: the whole lower panel moves together. */
   .controls {
     flex: none;
     min-height: 0;
     height: auto;
     overflow: visible;
     padding: 10px 4px 12px 0;
-    touch-action: auto;
+    touch-action: pan-y;
   }
 
   .actions {
@@ -91,23 +93,18 @@
   }
 
   .panel-button,
-  .actions button {
-    min-height: 46px;
-  }
-
+  .actions button { min-height: 46px; }
   .control-row input { min-height: 32px; }
 }
 
-/* Portrait: fixed video segment on top; ONLY the panel underneath swipes. */
+/* Portrait: the video stage is a fixed viewport segment; only .side scrolls. */
 @media (max-width: 850px) and (orientation: portrait) {
   #app {
     grid-template-rows: minmax(240px, 47dvh) minmax(0, 1fr);
   }
 
-  .side {
-    padding: 11px 11px max(18px, env(safe-area-inset-bottom));
-  }
-
+  #stage { position: relative; }
+  .side { padding: 11px 11px max(18px, env(safe-area-inset-bottom)); }
   .side h1 { font-size: 16px; }
   .side p { margin-bottom: 6px; }
   .switch { padding: 5px 0; }
@@ -120,38 +117,27 @@
   .hint { margin-top: 6px; }
 }
 
-/* Landscape: fixed camera on the left; ONLY the right panel swipes. */
+/* Landscape: fixed camera on left; only the right panel scrolls. */
 @media (max-width: 850px) and (orientation: landscape) {
   #app {
     grid-template-columns: minmax(0, 1fr) 300px;
     grid-template-rows: minmax(0, 1fr);
     height: 100dvh;
     min-height: 0;
-    overflow: hidden;
   }
 
-  #stage {
-    height: 100%;
-    min-height: 0;
-  }
-
+  #stage { height: 100%; min-height: 0; }
   .side {
     height: 100%;
     min-height: 0;
-    overflow-y: auto;
+    overflow-y: scroll;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
     touch-action: pan-y;
     padding: 10px 10px max(10px, env(safe-area-inset-bottom));
   }
-
-  .controls {
-    overflow: visible;
-    padding: 8px 4px 12px 0;
-    margin-bottom: 8px;
-  }
-
+  .controls { overflow: visible; padding: 8px 4px 12px 0; margin-bottom: 8px; }
   .stage-title { left: 9px; top: 9px; }
   .side h1 { font-size: 15px; }
   .side p, .hint { font-size: 9px; }
